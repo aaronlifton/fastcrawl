@@ -63,6 +63,37 @@ cargo run --example wiki --features multi_thread -- --duration-secs 60
   Send), or redesign the buffered extractor so it doesn’t have to materialize entire pages before handing links back to
   the frontier.
 
+# LLM
+
+> How can i use the downloaded wikipedia pages as a knowledge base to create a n LLM? Or embed them somehow to create a
+> web-crawling llm? Just an idea for discussion.
+
+- Curated corpus: once the crawler downloads articles, normalize them (strip navigation, fix links, capture metadata
+  like title & last-modified). Use a consistent chunking strategy (e.g., ~1–2 k tokens) so each chunk can later become
+  training data, eval text, or an embedding unit. Keep provenance (URL + timestamp) so you can refresh or purge stale
+  content.
+
+- Embedding pipeline: feed the cleaned chunks into a text-embedding model (OpenAI text-embedding-3-large, Cohere, etc.)
+  and store vectors plus metadata in a vector DB (pgvector, Qdrant, Milvus). That gives you retrieval-augmented
+  generation (RAG): when the crawler visits a page, you can immediately index it and later let an LLM answer questions
+  by retrieving the most relevant vectors.
+- Training a “Wikipedia-specialized” LLM: you’d need (1) a base model checkpoint, (2) tokenized Wikipedia data, (3)
+  significant compute. Turn each cleaned article or paragraph into training samples (causal LM format or instruction
+  format). Train or fine-tune on the dataset; for a web- focused agent you can add auxiliary signals such as extracted
+  link graphs, section headings, or QA pairs generated from the text.
+- Incremental refresh: because Wikipedia changes constantly, schedule the crawler to revisit pages and diff them. Update
+  embeddings and, if you’re fine-tuning, periodically regenerate training shards so the LLM stays current.
+- Web-crawling agent idea: combine the RAG store with the crawler so the agent can (a) decide which URLs to visit next
+  based on gaps in the knowledge base, (b) index new pages automatically, and (c) answer user questions by mixing live
+  crawls with stored embeddings. This is conceptually similar to how some “web-enabled” LLMs work today.
+- Practical considerations: deduplicate near-identical pages, respect licenses (Wikipedia’s CC BY-SA requires
+  attribution), and monitor storage— full dumps are huge. For training, make sure your tokenizer/language model
+  vocabulary handles wiki markup, math, etc., or preprocess them into plainer text.
+
+So the overall workflow is: crawl → clean → chunk → embed/store (for RAG) and/or tokenize → fine-tune (for a specialized
+model). You can start with RAG (lower compute, fast iteration) and only fine-tune once you know the use cases justify
+the training cost.
+
 ---
 
 Copyright 2025 Aaron Lifton
