@@ -2,6 +2,7 @@
 
 use crate::agents::MAX_INLINE_URL;
 use crate::agents::{AgentRegistry, CrawlTask, InlineString, InlineStringError, SubmitError};
+use crate::bloom::BloomFilter;
 use futures_util::task::AtomicWaker;
 use heapless::Deque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -160,6 +161,12 @@ impl<const QUEUE: usize, const FILTER_WORDS: usize> Frontier<QUEUE, FILTER_WORDS
     }
 }
 
+impl<const QUEUE: usize, const FILTER_WORDS: usize> Default for Frontier<QUEUE, FILTER_WORDS> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 struct WaitForFrontier<'a, const QUEUE: usize, const FILTER_WORDS: usize> {
     frontier: &'a Frontier<QUEUE, FILTER_WORDS>,
 }
@@ -184,49 +191,6 @@ impl<'a, const QUEUE: usize, const FILTER_WORDS: usize> core::future::Future
             }
         }
     }
-}
-
-struct BloomFilter<const WORDS: usize> {
-    words: [u64; WORDS],
-}
-
-impl<const WORDS: usize> BloomFilter<WORDS> {
-    const fn new() -> Self {
-        Self {
-            words: [0u64; WORDS],
-        }
-    }
-
-    fn insert(&mut self, data: &[u8]) -> bool {
-        if WORDS == 0 {
-            return false;
-        }
-        let bit_count = WORDS * 64;
-        let mut inserted = false;
-        for &seed in BLOOM_HASH_SEEDS.iter() {
-            let hash = bloom_hash(data, seed);
-            let idx = (hash as usize) % bit_count;
-            let word = idx / 64;
-            let bit = idx % 64;
-            let mask = 1u64 << bit;
-            if self.words[word] & mask == 0 {
-                inserted = true;
-                self.words[word] |= mask;
-            }
-        }
-        inserted
-    }
-}
-
-const BLOOM_HASH_SEEDS: [u64; 3] = [0x517cc1b727220a95, 0x6d0f27bdceb7b067, 0x9e3779b185ebca87];
-
-fn bloom_hash(data: &[u8], seed: u64) -> u64 {
-    let mut hash = seed ^ data.len() as u64;
-    for &byte in data {
-        hash ^= (byte as u64).wrapping_mul(0x100000001b3);
-        hash = hash.rotate_left(13).wrapping_mul(0xff51afd7ed558ccd);
-    }
-    hash ^ (hash >> 33)
 }
 
 #[cfg(test)]
