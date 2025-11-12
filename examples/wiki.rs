@@ -10,7 +10,7 @@ const SEEDS: &[&str] = &[
     "https://en.wikipedia.org/wiki/Cat",
 ];
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cli = Cli::parse();
     runtime::run(cli, SEEDS, Arc::new(wiki_filter))
 }

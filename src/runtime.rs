@@ -4,24 +4,21 @@ use crate::agents::{
     AgentRegistry, CrawlTask, InlineString, DEFAULT_AGENT_CAPACITY, DEFAULT_QUEUE_DEPTH,
 };
 use crate::frontier::{Frontier, FrontierError, DEFAULT_FRONTIER_QUEUE, DEFAULT_FRONTIER_SEEN};
-#[cfg(not(feature = "multi_thread"))]
 use crate::html::{stream_links, HtmlStreamError};
 use crate::{Cli, CrawlControls};
 use futures_util::future::join_all;
 use reqwest::Client;
 #[cfg(feature = "multi_thread")]
-use reqwest::Response;
-#[cfg(feature = "multi_thread")]
-use scraper::{Html, Selector};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+#[cfg(feature = "multi_thread")]
+use std::thread;
 use std::time::{Duration, Instant};
 use tokio::runtime::Builder;
-use tokio::task::yield_now;
-#[cfg(not(feature = "multi_thread"))]
-use tokio::task::{spawn_local, LocalSet};
 #[cfg(feature = "multi_thread")]
 use tokio::sync::mpsc;
+use tokio::task::{spawn_local, yield_now, LocalSet};
 use tokio::time::sleep;
 use url::Url;
 
@@ -32,13 +29,72 @@ const LINK_BATCH_CHANNEL_CAPACITY: usize = DEFAULT_AGENT_CAPACITY * 4;
 
 /// Predicate used to accept or reject discovered URLs.
 pub type UrlFilter = Arc<dyn Fn(&Url) -> bool + Send + Sync>;
+type DynError = Box<dyn std::error::Error + Send + Sync>;
+
+#[derive(Clone)]
+struct SharedRun {
+    stop_requested: Arc<AtomicBool>,
+    active_tasks: Arc<AtomicUsize>,
+    metrics: Arc<Metrics>,
+    controls: Arc<CrawlControls>,
+    run_duration: Duration,
+}
+
+impl SharedRun {
+    fn new(cli: &Cli) -> Self {
+        Self {
+            stop_requested: Arc::new(AtomicBool::new(false)),
+            active_tasks: Arc::new(AtomicUsize::new(0)),
+            metrics: Arc::new(Metrics::default()),
+            controls: Arc::new(cli.build_controls()),
+            run_duration: cli.run_duration(),
+        }
+    }
+}
+
+#[cfg(feature = "multi_thread")]
+#[derive(Clone, Copy)]
+struct ShardPartition {
+    index: usize,
+    total: usize,
+}
+
+#[cfg(feature = "multi_thread")]
+impl ShardPartition {
+    fn new(index: usize, total: usize) -> Self {
+        Self { index, total }
+    }
+
+    fn owner_for(url: &Url, total: usize) -> usize {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        url.as_str().hash(&mut hasher);
+        (hasher.finish() as usize) % total.max(1)
+    }
+
+    fn owner_for_str(input: &str, total: usize) -> usize {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        input.hash(&mut hasher);
+        (hasher.finish() as usize) % total.max(1)
+    }
+
+    fn total(&self) -> usize {
+        self.total
+    }
+
+    fn index(&self) -> usize {
+        self.index
+    }
+}
 
 /// Entry point used by examples to run the crawler with the provided seed URLs and link filter.
-pub fn run(cli: Cli, seeds: &[&str], filter: UrlFilter) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(cli: Cli, seeds: &[&str], filter: UrlFilter) -> Result<(), DynError> {
     #[cfg(feature = "multi_thread")]
     {
-        let rt = Builder::new_multi_thread().enable_all().build()?;
-        rt.block_on(run_multi_thread(cli, seeds, Arc::clone(&filter)))?
+        run_multi_thread(cli, seeds, Arc::clone(&filter))?;
     }
     #[cfg(not(feature = "multi_thread"))]
     {
@@ -63,14 +119,10 @@ struct AppState {
 }
 
 impl AppState {
-    fn new(cli: &Cli, filter: UrlFilter) -> Result<Self, reqwest::Error> {
+    fn new_with_shared(filter: UrlFilter, shared: &SharedRun) -> Result<Self, reqwest::Error> {
         let registry =
             Arc::new(AgentRegistry::<DEFAULT_AGENT_CAPACITY, DEFAULT_QUEUE_DEPTH>::new());
         let frontier = Arc::new(Frontier::<DEFAULT_FRONTIER_QUEUE, DEFAULT_FRONTIER_SEEN>::new());
-        let stop_requested = Arc::new(AtomicBool::new(false));
-        let active_tasks = Arc::new(AtomicUsize::new(0));
-        let metrics = Arc::new(Metrics::default());
-        let controls = Arc::new(cli.build_controls());
         let client = Client::builder()
             .user_agent(USER_AGENT)
             .redirect(reqwest::redirect::Policy::limited(5))
@@ -80,24 +132,21 @@ impl AppState {
         Ok(Self {
             registry,
             frontier,
-            stop_requested,
-            active_tasks,
-            metrics,
-            controls,
+            stop_requested: Arc::clone(&shared.stop_requested),
+            active_tasks: Arc::clone(&shared.active_tasks),
+            metrics: Arc::clone(&shared.metrics),
+            controls: Arc::clone(&shared.controls),
             client,
-            run_duration: cli.run_duration(),
+            run_duration: shared.run_duration,
             link_filter: filter,
         })
     }
 }
 
 #[cfg(not(feature = "multi_thread"))]
-async fn run_single_thread(
-    cli: Cli,
-    seeds: &[&str],
-    filter: UrlFilter,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let state = AppState::new(&cli, filter)?;
+async fn run_single_thread(cli: Cli, seeds: &[&str], filter: UrlFilter) -> Result<(), DynError> {
+    let shared = SharedRun::new(&cli);
+    let state = AppState::new_with_shared(filter, &shared)?;
     seed_frontier(state.frontier.as_ref(), seeds).await;
     let start = Instant::now();
 
@@ -114,56 +163,108 @@ async fn run_single_thread(
         workers.push(spawn_streaming_worker(&state, id));
     }
 
-    finish_run(state, dispatcher, workers, start).await;
+    finish_run(state, dispatcher, workers, start, true).await;
     Ok(())
 }
 
 #[cfg(feature = "multi_thread")]
-async fn run_multi_thread(
-    cli: Cli,
-    seeds: &[&str],
+fn run_multi_thread(cli: Cli, seeds: &[&str], filter: UrlFilter) -> Result<(), DynError> {
+    const SHARD_STACK_SIZE: usize = 8 * 1024 * 1024;
+    let shard_count = thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .max(1);
+    let shared = SharedRun::new(&cli);
+    let seeds_owned: Vec<String> = seeds.iter().map(|s| s.to_string()).collect();
+    let start = Instant::now();
+
+    let mut receivers = Vec::with_capacity(shard_count);
+    let mut senders_vec = Vec::with_capacity(shard_count);
+    for _ in 0..shard_count {
+        let (tx, rx) = mpsc::channel(LINK_BATCH_CHANNEL_CAPACITY);
+        senders_vec.push(tx);
+        receivers.push(rx);
+    }
+    let senders = Arc::new(senders_vec);
+
+    let mut handles = Vec::with_capacity(shard_count);
+    for (index, receiver) in receivers.into_iter().enumerate() {
+        let shared_clone = shared.clone();
+        let filter_clone = Arc::clone(&filter);
+        let senders_clone = Arc::clone(&senders);
+        let seeds_clone = seeds_owned.clone();
+        let builder = thread::Builder::new()
+            .name(format!("fastcrawl-shard-{index}"))
+            .stack_size(SHARD_STACK_SIZE);
+        handles.push(builder.spawn(move || -> Result<(), DynError> {
+            let rt = Builder::new_current_thread().enable_all().build()?;
+            let local = LocalSet::new();
+            rt.block_on(local.run_until(run_shard_streaming(
+                seeds_clone,
+                filter_clone,
+                shared_clone,
+                ShardPartition::new(index, shard_count),
+                senders_clone,
+                receiver,
+            )))
+        })?);
+    }
+
+    // Drop the coordinator-owned sender references so shard inbox loops can observe channel closure.
+    drop(senders);
+
+    for handle in handles {
+        handle.join().expect("shard thread panicked")?;
+    }
+
+    shared.metrics.report(start.elapsed());
+    Ok(())
+}
+
+#[cfg(feature = "multi_thread")]
+async fn run_shard_streaming(
+    seeds: Vec<String>,
     filter: UrlFilter,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let state = AppState::new(&cli, filter)?;
-    seed_frontier(state.frontier.as_ref(), seeds).await;
+    shared: SharedRun,
+    partition: ShardPartition,
+    remotes: Arc<Vec<mpsc::Sender<LinkBatch>>>,
+    inbox: mpsc::Receiver<LinkBatch>,
+) -> Result<(), DynError> {
+    let state = AppState::new_with_shared(filter, &shared)?;
+    seed_partitioned_frontier(state.frontier.as_ref(), &seeds, partition).await;
     let start = Instant::now();
 
     let dispatcher = {
         let frontier = Arc::clone(&state.frontier);
         let registry = Arc::clone(&state.registry);
-        tokio::spawn(async move {
+        spawn_local(async move {
             frontier.dispatch_loop(registry).await;
         })
     };
 
-    let (link_tx, link_rx) = mpsc::channel(LINK_BATCH_CHANNEL_CAPACITY);
-    let enqueue_handle = {
+    let inbox_handle = {
         let frontier = Arc::clone(&state.frontier);
         let stop_requested = Arc::clone(&state.stop_requested);
         let controls = Arc::clone(&state.controls);
         let metrics = Arc::clone(&state.metrics);
         let filter = Arc::clone(&state.link_filter);
-        tokio::spawn(async move {
-            link_enqueue_loop(
-                link_rx,
-                frontier,
-                stop_requested,
-                controls,
-                metrics,
-                filter,
-            )
-            .await;
+        spawn_local(async move {
+            shard_inbox_loop(inbox, frontier, stop_requested, controls, metrics, filter).await;
         })
     };
 
+    let router = Arc::new(ShardRouter::new(partition, remotes));
     let mut workers = Vec::new();
     for id in 0..DEFAULT_AGENT_CAPACITY {
-        workers.push(spawn_buffered_worker(&state, id, link_tx.clone()));
+        workers.push(spawn_streaming_worker_sharded(
+            &state,
+            id,
+            Arc::clone(&router),
+        ));
     }
-    drop(link_tx);
-    workers.push(enqueue_handle);
+    workers.push(inbox_handle);
 
-    finish_run(state, dispatcher, workers, start).await;
+    finish_run(state, dispatcher, workers, start, false).await;
     Ok(())
 }
 
@@ -172,6 +273,7 @@ async fn finish_run(
     dispatcher: tokio::task::JoinHandle<()>,
     workers: Vec<tokio::task::JoinHandle<()>>,
     start: Instant,
+    report_metrics: bool,
 ) {
     sleep(state.run_duration).await;
     state.stop_requested.store(true, Ordering::Release);
@@ -188,7 +290,9 @@ async fn finish_run(
 
     let _ = dispatcher.await;
     join_all(workers).await;
-    state.metrics.report(start.elapsed());
+    if report_metrics {
+        state.metrics.report(start.elapsed());
+    }
 }
 
 #[cfg(not(feature = "multi_thread"))]
@@ -218,29 +322,31 @@ fn spawn_streaming_worker(state: &AppState, id: usize) -> tokio::task::JoinHandl
 }
 
 #[cfg(feature = "multi_thread")]
-fn spawn_buffered_worker(
+fn spawn_streaming_worker_sharded(
     state: &AppState,
     id: usize,
-    link_tx: mpsc::Sender<LinkBatch>,
+    router: Arc<ShardRouter>,
 ) -> tokio::task::JoinHandle<()> {
     let registry = Arc::clone(&state.registry);
+    let frontier = Arc::clone(&state.frontier);
     let client = state.client.clone();
     let stop_requested = Arc::clone(&state.stop_requested);
     let active_tasks = Arc::clone(&state.active_tasks);
     let metrics = Arc::clone(&state.metrics);
     let controls = Arc::clone(&state.controls);
     let filter = Arc::clone(&state.link_filter);
-    tokio::spawn(async move {
-        worker_loop_buffered(
+    spawn_local(async move {
+        worker_loop_streaming_sharded(
             id,
             registry,
+            frontier,
             client,
             stop_requested,
             active_tasks,
             controls,
             metrics,
             filter,
-            link_tx,
+            router,
         )
         .await;
     })
@@ -293,16 +399,22 @@ async fn worker_loop_streaming<
 }
 
 #[cfg(feature = "multi_thread")]
-async fn worker_loop_buffered<const COUNT: usize, const DEPTH: usize>(
+async fn worker_loop_streaming_sharded<
+    const COUNT: usize,
+    const DEPTH: usize,
+    const QUEUE: usize,
+    const SEEN: usize,
+>(
     agent_id: usize,
     registry: Arc<AgentRegistry<COUNT, DEPTH>>,
+    frontier: Arc<Frontier<QUEUE, SEEN>>,
     client: Client,
     stop_requested: Arc<AtomicBool>,
     active_tasks: Arc<AtomicUsize>,
     controls: Arc<CrawlControls>,
     metrics: Arc<Metrics>,
     filter: UrlFilter,
-    link_tx: mpsc::Sender<LinkBatch>,
+    router: Arc<ShardRouter>,
 ) {
     let Some(agent) = registry.agent(agent_id) else {
         eprintln!("worker {agent_id}: agent missing");
@@ -311,14 +423,15 @@ async fn worker_loop_buffered<const COUNT: usize, const DEPTH: usize>(
 
     while let Some(task) = agent.next_task().await {
         let _active = ActiveTaskGuard::new(active_tasks.as_ref());
-        if let Err(err) = handle_task_buffered(
+        if let Err(err) = handle_task_streaming_sharded(
             &client,
+            Arc::clone(&frontier),
             task,
             stop_requested.as_ref(),
             Arc::clone(&controls),
             metrics.as_ref(),
             Arc::clone(&filter),
-            &link_tx,
+            router.as_ref(),
         )
         .await
         {
@@ -395,14 +508,15 @@ async fn handle_task_streaming<const QUEUE: usize, const SEEN: usize>(
 }
 
 #[cfg(feature = "multi_thread")]
-async fn handle_task_buffered(
+async fn handle_task_streaming_sharded<const QUEUE: usize, const SEEN: usize>(
     client: &Client,
+    frontier: Arc<Frontier<QUEUE, SEEN>>,
     task: CrawlTask,
     stop_requested: &AtomicBool,
     controls: Arc<CrawlControls>,
     metrics: &Metrics,
     filter: UrlFilter,
-    link_tx: &mpsc::Sender<LinkBatch>,
+    router: &ShardRouter,
 ) -> Result<(), TaskError> {
     let url = task.url().to_string();
     println!("[depth {}] {}", task.depth(), url);
@@ -424,27 +538,36 @@ async fn handle_task_buffered(
     metrics.record_page_fetched();
 
     let base = Url::parse(&url).map_err(|err| TaskError::parse(&url, err))?;
-    let discovered_links =
-        extract_links_buffered(&url, &base, response, controls.as_ref(), &filter).await?;
+    let base_for_links = Arc::new(base.clone());
+    let controls_for_links = Arc::clone(&controls);
+    let filter_for_links = Arc::clone(&filter);
+    let discovered_links = stream_links(response, controls.max_links_per_page(), move |href| {
+        base_for_links.join(href).ok().filter(|candidate| {
+            candidate
+                .domain()
+                .map(|domain| controls_for_links.is_domain_allowed(domain))
+                .unwrap_or(false)
+                && (filter_for_links.as_ref())(candidate)
+        })
+    })
+    .await
+    .map_err(|err| TaskError::html(&url, err))?;
 
     if task.depth() >= controls.max_depth() || discovered_links.is_empty() {
         return Ok(());
     }
 
-    if link_tx
-        .send(LinkBatch {
-            depth: task.depth(),
-            links: discovered_links,
-        })
-        .await
-        .is_err()
-    {
-        if !stop_requested.load(Ordering::Acquire) {
-            eprintln!("enqueue channel closed while processing {url}");
-        }
-    }
-
-    Ok(())
+    route_discovered_links(
+        router,
+        frontier,
+        stop_requested,
+        controls,
+        metrics,
+        filter,
+        discovered_links,
+        task.depth(),
+    )
+    .await
 }
 
 async fn enqueue_discovered_links<const QUEUE: usize, const SEEN: usize>(
@@ -502,7 +625,67 @@ async fn enqueue_discovered_links<const QUEUE: usize, const SEEN: usize>(
         }
     }
 
-	Ok(())
+    Ok(())
+}
+
+#[cfg(feature = "multi_thread")]
+async fn route_discovered_links<const QUEUE: usize, const SEEN: usize>(
+    router: &ShardRouter,
+    frontier: Arc<Frontier<QUEUE, SEEN>>,
+    stop_requested: &AtomicBool,
+    controls: Arc<CrawlControls>,
+    metrics: &Metrics,
+    filter: UrlFilter,
+    discovered_links: Vec<Url>,
+    parent_depth: u8,
+) -> Result<(), TaskError> {
+    if discovered_links.is_empty() {
+        return Ok(());
+    }
+
+    let mut local_links = Vec::new();
+    let mut remote: HashMap<usize, Vec<Url>> = HashMap::new();
+    for link in discovered_links {
+        let owner = ShardPartition::owner_for(&link, router.partition.total());
+        if owner == router.partition.index() {
+            local_links.push(link);
+        } else {
+            remote.entry(owner).or_default().push(link);
+        }
+    }
+
+    if !local_links.is_empty() {
+        enqueue_discovered_links(
+            local_links,
+            parent_depth,
+            Arc::clone(&frontier),
+            stop_requested,
+            Arc::clone(&controls),
+            metrics,
+            Arc::clone(&filter),
+        )
+        .await?;
+    }
+
+    for (shard, links) in remote {
+        if let Some(sender) = router.remotes.get(shard) {
+            if sender
+                .send(LinkBatch {
+                    depth: parent_depth,
+                    links,
+                })
+                .await
+                .is_err()
+            {
+                eprintln!(
+                    "shard {}: remote shard {shard} channel closed",
+                    router.partition.index()
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(feature = "multi_thread")]
@@ -512,15 +695,35 @@ struct LinkBatch {
 }
 
 #[cfg(feature = "multi_thread")]
-async fn link_enqueue_loop<const QUEUE: usize, const SEEN: usize>(
-    mut rx: mpsc::Receiver<LinkBatch>,
+struct ShardRouter {
+    partition: ShardPartition,
+    remotes: Arc<Vec<mpsc::Sender<LinkBatch>>>,
+}
+
+#[cfg(feature = "multi_thread")]
+impl ShardRouter {
+    fn new(partition: ShardPartition, remotes: Arc<Vec<mpsc::Sender<LinkBatch>>>) -> Self {
+        Self { partition, remotes }
+    }
+}
+
+#[cfg(feature = "multi_thread")]
+async fn shard_inbox_loop<const QUEUE: usize, const SEEN: usize>(
+    mut inbox: mpsc::Receiver<LinkBatch>,
     frontier: Arc<Frontier<QUEUE, SEEN>>,
     stop_requested: Arc<AtomicBool>,
     controls: Arc<CrawlControls>,
     metrics: Arc<Metrics>,
     filter: UrlFilter,
 ) {
-    while let Some(batch) = rx.recv().await {
+    let mut closed = false;
+    while let Some(batch) = {
+        if stop_requested.load(Ordering::Acquire) && !closed {
+            inbox.close();
+            closed = true;
+        }
+        inbox.recv().await
+    } {
         if batch.links.is_empty() {
             continue;
         }
@@ -538,46 +741,12 @@ async fn link_enqueue_loop<const QUEUE: usize, const SEEN: usize>(
         {
             let TaskError { url, message, .. } = err;
             let label = url.unwrap_or_else(|| "<unknown>".to_string());
-            eprintln!("enqueue loop failed for {label}: {message}");
+            eprintln!("shard inbox failed for {label}: {message}");
         }
     }
 }
 
-#[cfg(feature = "multi_thread")]
-async fn extract_links_buffered(
-    source_url: &str,
-    base: &Url,
-    response: Response,
-    controls: &CrawlControls,
-    filter: &UrlFilter,
-) -> Result<Vec<Url>, TaskError> {
-    let body = response
-        .text()
-        .await
-        .map_err(|err| TaskError::http(source_url, err))?;
-
-    let document = Html::parse_document(&body);
-    let selector = Selector::parse("a[href]").expect("valid selector");
-    let mut links = Vec::new();
-    for element in document.select(&selector) {
-        if let Some(href) = element.value().attr("href") {
-            if let Ok(url) = base.join(href) {
-                let domain_allowed = url
-                    .domain()
-                    .map(|domain| controls.is_domain_allowed(domain))
-                    .unwrap_or(false);
-                if domain_allowed && (filter.as_ref())(&url) {
-                    links.push(url);
-                    if links.len() >= controls.max_links_per_page() {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-    Ok(links)
-}
-
+#[cfg(not(feature = "multi_thread"))]
 async fn seed_frontier(
     frontier: &Frontier<DEFAULT_FRONTIER_QUEUE, DEFAULT_FRONTIER_SEEN>,
     seeds: &[&str],
@@ -587,6 +756,26 @@ async fn seed_frontier(
             .push_seed_url(seed, 0)
             .await
             .expect("seed enqueue succeeds");
+    }
+}
+
+#[cfg(feature = "multi_thread")]
+async fn seed_partitioned_frontier(
+    frontier: &Frontier<DEFAULT_FRONTIER_QUEUE, DEFAULT_FRONTIER_SEEN>,
+    seeds: &[String],
+    partition: ShardPartition,
+) {
+    for seed in seeds {
+        let owner = ShardPartition::owner_for_str(seed, partition.total());
+        if owner != partition.index() {
+            continue;
+        }
+        if let Err(err) = frontier.push_seed_url(seed, 0).await {
+            eprintln!(
+                "shard {}: failed to enqueue seed {seed}: {err:?}",
+                partition.index()
+            );
+        }
     }
 }
 
@@ -646,7 +835,6 @@ impl Metrics {
             TaskErrorKind::Frontier => {
                 self.frontier_rejections.fetch_add(1, Ordering::Relaxed);
             }
-            #[cfg(not(feature = "multi_thread"))]
             TaskErrorKind::Html => {
                 self.parse_errors.fetch_add(1, Ordering::Relaxed);
             }
@@ -688,7 +876,6 @@ enum TaskErrorKind {
     Http,
     Parse,
     Frontier,
-    #[cfg(not(feature = "multi_thread"))]
     Html,
 }
 
@@ -723,7 +910,6 @@ impl TaskError {
         }
     }
 
-    #[cfg(not(feature = "multi_thread"))]
     fn html(url: &str, err: HtmlStreamError) -> Self {
         Self {
             url: Some(url.to_string()),
