@@ -4,7 +4,7 @@ use crate::agents::{
     AgentRegistry, CrawlTask, InlineString, DEFAULT_AGENT_CAPACITY, DEFAULT_QUEUE_DEPTH,
 };
 #[cfg(feature = "multi_thread")]
-use crate::controls::PartitionStrategyArg;
+use crate::controls::{PartitionSettings, PartitionStrategyArg};
 use crate::frontier::{Frontier, FrontierError, DEFAULT_FRONTIER_QUEUE, DEFAULT_FRONTIER_SEEN};
 use crate::html::{stream_links, HtmlStreamError};
 use crate::{Cli, CrawlControls};
@@ -25,6 +25,8 @@ use std::{
 use tokio::runtime::Builder;
 #[cfg(feature = "multi_thread")]
 use tokio::sync::mpsc;
+#[cfg(feature = "multi_thread")]
+use tokio::sync::Mutex;
 use tokio::task::{spawn_local, yield_now, LocalSet};
 use tokio::time::sleep;
 use url::Url;
@@ -35,6 +37,10 @@ const DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const LINK_BATCH_CHANNEL_CAPACITY: usize = DEFAULT_AGENT_CAPACITY * 4;
 #[cfg(feature = "multi_thread")]
 const SHARD_STACK_SIZE: usize = 8 * 1024 * 1024;
+#[cfg(feature = "multi_thread")]
+const DEFAULT_REMOTE_BATCH_SIZE: usize = 8;
+#[cfg(feature = "multi_thread")]
+const REMOTE_BUFFER_MAX_IDLE_PAGES: u8 = 4;
 
 /// Predicate used to accept or reject discovered URLs.
 pub type UrlFilter = Arc<dyn Fn(&Url) -> bool + Send + Sync>;
@@ -90,25 +96,25 @@ impl ShardPartition {
 #[cfg(feature = "multi_thread")]
 #[derive(Clone)]
 struct ShardStrategy {
-    total: usize,
+    shards: usize,
     kind: PartitionKind,
 }
 
 #[cfg(feature = "multi_thread")]
 impl ShardStrategy {
-    fn new(total: usize, kind: PartitionKind) -> Self {
+    fn new(shards: usize, kind: PartitionKind) -> Self {
         Self {
-            total: total.max(1),
+            shards: shards.max(1),
             kind,
         }
     }
 
     fn owner_for(&self, url: &Url) -> usize {
         match self.kind {
-            PartitionKind::Hash => Self::hash(url.as_str(), self.total),
-            PartitionKind::WikiPrefix => self
-                .wiki_bucket(url)
-                .unwrap_or_else(|| Self::hash(url.as_str(), self.total)),
+            PartitionKind::Hash => Self::hash(url.as_str(), self.shards),
+            PartitionKind::WikiPrefix(ref cfg) => self
+                .wiki_owner(url, cfg)
+                .unwrap_or_else(|| Self::hash(url.as_str(), self.shards)),
         }
     }
 
@@ -116,10 +122,15 @@ impl ShardStrategy {
         Url::parse(value)
             .ok()
             .map(|url| self.owner_for(&url))
-            .unwrap_or_else(|| Self::hash(value, self.total))
+            .unwrap_or_else(|| Self::hash(value, self.shards))
     }
 
-    fn wiki_bucket(&self, url: &Url) -> Option<usize> {
+    fn wiki_owner(&self, url: &Url, cfg: &WikiPrefixConfig) -> Option<usize> {
+        let bucket = self.wiki_bucket(url, cfg)?;
+        Some(bucket % self.shards)
+    }
+
+    fn wiki_bucket(&self, url: &Url, cfg: &WikiPrefixConfig) -> Option<usize> {
         if !url
             .domain()
             .map(|d| d.contains("wikipedia.org"))
@@ -128,37 +139,76 @@ impl ShardStrategy {
             return None;
         }
         let slug = url.path().strip_prefix("/wiki/")?;
-        let first = slug.chars().next()?;
-        if first.is_ascii_alphabetic() {
-            let idx = (first.to_ascii_uppercase() as u8 - b'A') as usize;
-            Some(idx % self.total)
+        let (namespace_part, title_part) = if cfg.include_namespace {
+            match slug.split_once(':') {
+                Some((ns, rest)) if !rest.is_empty() => (Some(ns), rest),
+                _ => (None, slug),
+            }
+        } else {
+            (None, slug)
+        };
+
+        let title_char = Self::first_alpha(title_part)?;
+        let title_idx = Self::alpha_index(title_char)?;
+        let mut bucket = title_idx;
+
+        if cfg.include_namespace {
+            if let Some(ns) = namespace_part {
+                if let Some(ns_char) = Self::first_alpha(ns) {
+                    if let Some(ns_idx) = Self::alpha_index(ns_char) {
+                        bucket += (ns_idx + 1) * 32;
+                    }
+                }
+            }
+        }
+
+        Some(bucket % cfg.bucket_count.max(1))
+    }
+
+    fn hash(value: &str, modulus: usize) -> usize {
+        let mut hasher = DefaultHasher::new();
+        value.hash(&mut hasher);
+        (hasher.finish() as usize) % modulus.max(1)
+    }
+
+    fn first_alpha(input: &str) -> Option<char> {
+        input.chars().find(|c| c.is_ascii_alphabetic())
+    }
+
+    fn alpha_index(ch: char) -> Option<usize> {
+        if ch.is_ascii_alphabetic() {
+            Some((ch.to_ascii_uppercase() as u8 - b'A') as usize)
         } else {
             None
         }
     }
-
-    fn hash(value: &str, total: usize) -> usize {
-        let mut hasher = DefaultHasher::new();
-        value.hash(&mut hasher);
-        (hasher.finish() as usize) % total.max(1)
-    }
 }
 
 #[cfg(feature = "multi_thread")]
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum PartitionKind {
     Hash,
-    WikiPrefix,
+    WikiPrefix(WikiPrefixConfig),
 }
 
 #[cfg(feature = "multi_thread")]
-impl From<PartitionStrategyArg> for PartitionKind {
-    fn from(value: PartitionStrategyArg) -> Self {
-        match value {
+impl PartitionKind {
+    fn from_settings(settings: PartitionSettings, shards: usize) -> Self {
+        match settings.strategy {
             PartitionStrategyArg::Hash => PartitionKind::Hash,
-            PartitionStrategyArg::WikiPrefix => PartitionKind::WikiPrefix,
+            PartitionStrategyArg::WikiPrefix => PartitionKind::WikiPrefix(WikiPrefixConfig {
+                bucket_count: settings.wiki_bucket_count.unwrap_or(shards).max(1),
+                include_namespace: settings.wiki_include_namespace,
+            }),
         }
     }
+}
+
+#[cfg(feature = "multi_thread")]
+#[derive(Clone)]
+struct WikiPrefixConfig {
+    bucket_count: usize,
+    include_namespace: bool,
 }
 
 /// Entry point used by examples to run the crawler with the provided seed URLs and link filter.
@@ -245,8 +295,13 @@ fn run_multi_thread(cli: Cli, seeds: &[&str], filter: UrlFilter) -> Result<(), D
         .unwrap_or(4)
         .max(1);
     let shared = SharedRun::new(&cli);
-    let partition_kind = PartitionKind::from(cli.partition_strategy());
-    let strategy = Arc::new(ShardStrategy::new(shard_count, partition_kind));
+    let partition_settings = cli.partition_settings();
+    let partition_kind = PartitionKind::from_settings(partition_settings, shard_count);
+    let strategy = Arc::new(ShardStrategy::new(shard_count, partition_kind.clone()));
+    let remote_batch_size = partition_settings
+        .remote_batch_size
+        .unwrap_or(DEFAULT_REMOTE_BATCH_SIZE)
+        .max(1);
     let seeds_owned: Vec<String> = seeds.iter().map(|s| s.to_string()).collect();
     let start = Instant::now();
 
@@ -279,6 +334,7 @@ fn run_multi_thread(cli: Cli, seeds: &[&str], filter: UrlFilter) -> Result<(), D
                 partition,
                 senders_clone,
                 receiver,
+                remote_batch_size,
             )))
         })?);
     }
@@ -302,6 +358,7 @@ async fn run_shard_streaming(
     partition: ShardPartition,
     remotes: Arc<Vec<mpsc::Sender<LinkBatch>>>,
     inbox: mpsc::Receiver<LinkBatch>,
+    remote_batch_size: usize,
 ) -> Result<(), DynError> {
     let state = AppState::new_with_shared(filter, &shared)?;
     seed_partitioned_frontier(state.frontier.as_ref(), &seeds, &partition).await;
@@ -326,7 +383,7 @@ async fn run_shard_streaming(
         })
     };
 
-    let router = Arc::new(ShardRouter::new(partition, remotes));
+    let router = Arc::new(ShardRouter::new(partition, remotes, remote_batch_size));
     let mut workers = Vec::new();
     for id in 0..DEFAULT_AGENT_CAPACITY {
         workers.push(spawn_streaming_worker_sharded(
@@ -337,7 +394,9 @@ async fn run_shard_streaming(
     }
     workers.push(inbox_handle);
 
+    let metrics_for_flush = Arc::clone(&state.metrics);
     finish_run(state, dispatcher, workers, start, false).await;
+    router.flush_all(metrics_for_flush.as_ref()).await;
     Ok(())
 }
 
@@ -717,13 +776,13 @@ async fn route_discovered_links<const QUEUE: usize, const SEEN: usize>(
     }
 
     let mut local_links = Vec::new();
-    let mut remote: HashMap<usize, Vec<Url>> = HashMap::new();
+    let mut remote_pending: HashMap<usize, Vec<Url>> = HashMap::new();
     for link in discovered_links {
         let owner = router.partition.shard_for_url(&link);
         if owner == router.partition.index() {
             local_links.push(link);
         } else {
-            remote.entry(owner).or_default().push(link);
+            remote_pending.entry(owner).or_default().push(link);
         }
     }
 
@@ -741,26 +800,15 @@ async fn route_discovered_links<const QUEUE: usize, const SEEN: usize>(
         .await?;
     }
 
-    for (shard, links) in remote {
-        if let Some(sender) = router.remotes.get(shard) {
-            let batch_len = links.len();
-            if sender
-                .send(LinkBatch {
-                    depth: parent_depth,
-                    links,
-                })
-                .await
-                .is_err()
-            {
-                eprintln!(
-                    "shard {}: remote shard {shard} channel closed",
-                    router.partition.index()
-                );
-            } else {
-                metrics.record_remote_shard_links(batch_len);
-            }
+    for (shard, links) in remote_pending {
+        if !links.is_empty() {
+            router
+                .buffer_remote(shard, parent_depth, links, metrics)
+                .await;
         }
     }
+
+    router.flush_idle(metrics).await;
 
     Ok(())
 }
@@ -775,13 +823,134 @@ struct LinkBatch {
 struct ShardRouter {
     partition: ShardPartition,
     remotes: Arc<Vec<mpsc::Sender<LinkBatch>>>,
+    batch_size: usize,
+    buffers: Arc<RemoteBuffers>,
 }
 
 #[cfg(feature = "multi_thread")]
 impl ShardRouter {
-    fn new(partition: ShardPartition, remotes: Arc<Vec<mpsc::Sender<LinkBatch>>>) -> Self {
-        Self { partition, remotes }
+    fn new(
+        partition: ShardPartition,
+        remotes: Arc<Vec<mpsc::Sender<LinkBatch>>>,
+        batch_size: usize,
+    ) -> Self {
+        Self {
+            partition,
+            remotes,
+            batch_size: batch_size.max(1),
+            buffers: Arc::new(RemoteBuffers::default()),
+        }
     }
+
+    async fn buffer_remote(&self, shard: usize, depth: u8, links: Vec<Url>, metrics: &Metrics) {
+        if let Some(batch) = self
+            .buffers
+            .extend(shard, depth, links, self.batch_size)
+            .await
+        {
+            self.flush_batch(shard, depth, batch, metrics).await;
+        }
+    }
+
+    async fn flush_idle(&self, metrics: &Metrics) {
+        let stale = self.buffers.flush_idle(REMOTE_BUFFER_MAX_IDLE_PAGES).await;
+        for (shard, depth, links) in stale {
+            self.flush_batch(shard, depth, links, metrics).await;
+        }
+    }
+
+    async fn flush_all(&self, metrics: &Metrics) {
+        let pending = self.buffers.flush_all().await;
+        for (shard, depth, links) in pending {
+            self.flush_batch(shard, depth, links, metrics).await;
+        }
+    }
+
+    async fn flush_batch(&self, shard: usize, depth: u8, links: Vec<Url>, metrics: &Metrics) {
+        if links.is_empty() {
+            return;
+        }
+        if let Some(sender) = self.remotes.get(shard) {
+            let count = links.len();
+            if sender.send(LinkBatch { depth, links }).await.is_err() {
+                eprintln!(
+                    "shard {}: remote shard {shard} channel closed",
+                    self.partition.index()
+                );
+            } else {
+                metrics.record_remote_shard_links(count);
+            }
+        }
+    }
+}
+
+#[cfg(feature = "multi_thread")]
+#[derive(Default)]
+struct RemoteBuffers {
+    inner: Mutex<HashMap<(usize, u8), PendingBatch>>,
+}
+
+#[cfg(feature = "multi_thread")]
+impl RemoteBuffers {
+    async fn extend(
+        &self,
+        shard: usize,
+        depth: u8,
+        mut links: Vec<Url>,
+        batch_size: usize,
+    ) -> Option<Vec<Url>> {
+        let mut guard = self.inner.lock().await;
+        let entry = guard
+            .entry((shard, depth))
+            .or_insert_with(PendingBatch::default);
+        entry.links.append(&mut links);
+        entry.idle_pages = 0;
+        if entry.links.len() >= batch_size {
+            guard.remove(&(shard, depth)).map(|batch| batch.links)
+        } else {
+            None
+        }
+    }
+
+    async fn flush_idle(&self, max_idle_pages: u8) -> Vec<(usize, u8, Vec<Url>)> {
+        let mut guard = self.inner.lock().await;
+        let mut flushed = Vec::new();
+        let mut to_remove = Vec::new();
+        for (&(shard, depth), batch) in guard.iter_mut() {
+            if batch.links.is_empty() {
+                to_remove.push((shard, depth));
+                continue;
+            }
+            batch.idle_pages = batch.idle_pages.saturating_add(1);
+            if batch.idle_pages >= max_idle_pages {
+                to_remove.push((shard, depth));
+            }
+        }
+        for key in to_remove {
+            if let Some(batch) = guard.remove(&key) {
+                if !batch.links.is_empty() {
+                    flushed.push((key.0, key.1, batch.links));
+                }
+            }
+        }
+        flushed
+    }
+
+    async fn flush_all(&self) -> Vec<(usize, u8, Vec<Url>)> {
+        let mut guard = self.inner.lock().await;
+        guard
+            .drain()
+            .filter(|(_, batch)| !batch.links.is_empty())
+            .map(|((shard, depth), batch)| (shard, depth, batch.links))
+            .collect()
+    }
+}
+
+#[cfg(feature = "multi_thread")]
+#[derive(Default)]
+struct PendingBatch {
+    links: Vec<Url>,
+    idle_pages: u8,
 }
 
 #[cfg(feature = "multi_thread")]

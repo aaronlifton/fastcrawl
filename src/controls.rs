@@ -95,6 +95,21 @@ pub struct Cli {
     #[cfg(feature = "multi_thread")]
     #[arg(long, env = "FASTCRAWL_PARTITION", default_value = "hash")]
     pub partition: PartitionStrategyArg,
+
+    /// Number of wiki prefix buckets (0 = auto = shard count)
+    #[cfg(feature = "multi_thread")]
+    #[arg(long, env = "FASTCRAWL_PARTITION_BUCKETS", default_value_t = 0)]
+    pub partition_buckets: usize,
+
+    /// Treat namespaces (e.g., Talk:, Help:) as part of the partition key
+    #[cfg(feature = "multi_thread")]
+    #[arg(long, env = "FASTCRAWL_PARTITION_NAMESPACE", default_value_t = false)]
+    pub partition_namespace: bool,
+
+    /// Maximum remote links to buffer before flushing to another shard (0 = default)
+    #[cfg(feature = "multi_thread")]
+    #[arg(long, env = "FASTCRAWL_REMOTE_BATCH_SIZE", default_value_t = 0)]
+    pub remote_batch_size: usize,
 }
 
 impl Cli {
@@ -123,8 +138,13 @@ impl Cli {
 
     #[cfg(feature = "multi_thread")]
     /// Returns the requested sharding strategy when multi-threading is enabled.
-    pub fn partition_strategy(&self) -> PartitionStrategyArg {
-        self.partition
+    pub fn partition_settings(&self) -> PartitionSettings {
+        PartitionSettings {
+            strategy: self.partition,
+            wiki_bucket_count: (self.partition_buckets > 0).then_some(self.partition_buckets),
+            wiki_include_namespace: self.partition_namespace,
+            remote_batch_size: (self.remote_batch_size > 0).then_some(self.remote_batch_size),
+        }
     }
 }
 
@@ -136,4 +156,18 @@ pub enum PartitionStrategyArg {
     Hash,
     /// Use Wikipedia-style namespace/title prefixes to keep related pages together.
     WikiPrefix,
+}
+
+#[cfg(feature = "multi_thread")]
+#[derive(Copy, Clone, Debug)]
+/// Parsed partition configuration used by the runtime.
+pub struct PartitionSettings {
+    /// Selected strategy variant.
+    pub strategy: PartitionStrategyArg,
+    /// Optional bucket count override for wiki prefix strategy (defaults to shard count when `None`).
+    pub wiki_bucket_count: Option<usize>,
+    /// Whether to incorporate namespace prefixes (e.g., `Talk:`) into the partition key.
+    pub wiki_include_namespace: bool,
+    /// Optional remote batch size override.
+    pub remote_batch_size: Option<usize>,
 }

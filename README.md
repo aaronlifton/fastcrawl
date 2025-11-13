@@ -6,24 +6,35 @@ core runtime.
 
 Current fastest speed, with default controls of `max-depth` 4, `max-links-per-page` 16, `politeness-ms` 250,
 `partition-strategy` 'wiki-prefix' (instead of 'hash'), and `duration-secs` 4 (it crawls for 4 seconds, but any enqued
-link is still awaited, so it runs for approximately 30 sec.) is **68.98 pages/sec**.
+link is still awaited, so it runs for approximately 30 sec.) is **71.95 pages/sec**.
 
 ## Metrics
 
-When running `cargo run --example wiki --features multi_thread -- --duration-secs 4 --partition wiki-prefix`:
+When running
 
 ```
---- crawl metrics (29.43s) ---
-pages fetched: 2030
-urls fetched/sec: 68.98
-urls discovered: 4844
-urls enqueued: 2026
-duplicate skips: 2818
+  cargo run --example wiki --features multi_thread -- \
+    --duration-secs 4 \
+    --partition wiki-prefix \
+    --partition-namespace \
+    --partition-buckets 26 \
+    --remote-batch-size 32
+```
+
+The crawl metrics were:
+
+```
+--- crawl metrics (26.46s) ---
+pages fetched: 1904
+urls fetched/sec: 71.95
+urls discovered: 4351
+urls enqueued: 1900
+duplicate skips: 2451
 frontier rejects: 0
 http errors: 0
 url parse errors: 0
-local shard enqueues: 9315
-remote shard links: 3039 (batches 1442)
+local shard enqueues: 7870
+remote shard links: 2718 (batches 331)
 ```
 
 ## Highlights
@@ -73,6 +84,10 @@ cargo run --example wiki --features multi_thread -- --duration-secs 60
 - Cross-shard discoveries are routed through bounded mpsc channels, so enqueue contention happens on a single consumer
   instead of every worker.
 - Pass `--partition wiki-prefix` (default: `hash`) to keep Wikipedia articles with similar prefixes on the same shard.
+- Use `--partition-buckets <n>` (default `0`, meaning shard count) to control how many alphabetical buckets feed into
+  the shards, and `--partition-namespace` to keep namespaces like `Talk:` or `Help:` on stable shards.
+- Tune `--remote-batch-size <n>` (default 8) to control how many cross-shard links get buffered before the router sends
+  them; higher values reduce channel wakeups at the cost of slightly delayed enqueues on the destination shard.
 
 ## Customizing Crawls
 
@@ -80,7 +95,8 @@ cargo run --example wiki --features multi_thread -- --duration-secs 60
   delays, run duration, and more. See `src/controls.rs` for every option.
 - `UrlFilter` lets you inject arbitrary site-specific logic—`examples/wiki.rs` filters out non-article namespaces and
   query patterns.
-- Metrics live in `src/runtime.rs` and can be extended if you need additional counters or telemetry sinks.
+- Metrics live in `src/runtime.rs` and can be extended if you need additional counters or telemetry sinks. Multi-thread
+  runs also report `local shard enqueues` vs `remote shard links (batches)` so you can gauge partition efficiency.
 
 ## LLM-Oriented Next Steps
 
