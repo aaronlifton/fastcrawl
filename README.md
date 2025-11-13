@@ -5,8 +5,9 @@ Wikipedia example (`examples/wiki.rs`) that demonstrates how to plug custom link
 core runtime.
 
 Current fastest speed, with default controls of `max-depth` 4, `max-links-per-page` 16, `politeness-ms` 250,
-`partition-strategy` 'wiki-prefix' (instead of 'hash'), and `duration-secs` 4 (it crawls for 4 seconds, but any enqued
-link is still awaited, so it runs for approximately 30 sec.) is **71.95 pages/sec**.
+`partition-strategy` 'wiki-prefix' (instead of 'hash'), `partition-buckets` 26, `remote-batch-size` 32, and
+`duration-secs` 4 (it crawls for 4 seconds, but any enqued link is still awaited, so it runs for approximately 26
+seconds.) is **71.95 pages/sec**.
 
 ## Metrics
 
