@@ -110,6 +110,11 @@ pub struct Cli {
     #[cfg(feature = "multi_thread")]
     #[arg(long, env = "FASTCRAWL_REMOTE_BATCH_SIZE", default_value_t = 0)]
     pub remote_batch_size: usize,
+
+    /// Emit per-shard channel-closed logs (helps debugging shutdown races).
+    #[cfg(feature = "multi_thread")]
+    #[arg(long, env = "FASTCRAWL_REMOTE_CHANNEL_LOGS", default_value_t = false)]
+    pub remote_channel_logs: bool,
 }
 
 impl Cli {
@@ -144,6 +149,7 @@ impl Cli {
             wiki_bucket_count: (self.partition_buckets > 0).then_some(self.partition_buckets),
             wiki_include_namespace: self.partition_namespace,
             remote_batch_size: (self.remote_batch_size > 0).then_some(self.remote_batch_size),
+            remote_channel_logs: self.remote_channel_logs,
         }
     }
 }
@@ -170,4 +176,6 @@ pub struct PartitionSettings {
     pub wiki_include_namespace: bool,
     /// Optional remote batch size override.
     pub remote_batch_size: Option<usize>,
+    /// Whether to log channel-closed warnings for cross-shard sends.
+    pub remote_channel_logs: bool,
 }

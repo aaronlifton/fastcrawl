@@ -6,8 +6,8 @@ core runtime.
 
 Current fastest speed, with default controls of `max-depth` 4, `max-links-per-page` 16, `politeness-ms` 250,
 `partition-strategy` 'wiki-prefix' (instead of 'hash'), `partition-buckets` 26, `remote-batch-size` 32, and
-`duration-secs` 4 (it crawls for 4 seconds, but any enqued link is still awaited, so it runs for approximately 26
-seconds.) is **71.95 pages/sec**.
+`duration-secs` 4 (it crawls for 4 seconds, but any enqued link is still awaited, so it ran for 26.61s) is **75.12
+pages/sec**.
 
 ## Metrics
 
@@ -89,6 +89,8 @@ cargo run --example wiki --features multi_thread -- --duration-secs 60
   the shards, and `--partition-namespace` to keep namespaces like `Talk:` or `Help:` on stable shards.
 - Tune `--remote-batch-size <n>` (default 8) to control how many cross-shard links get buffered before the router sends
   them; higher values reduce channel wakeups at the cost of slightly delayed enqueues on the destination shard.
+- Enable `--remote-channel-logs` only when debugging channel shutdowns; it reintroduces the verbose “remote shard …
+  closed” logs.
 
 ## Customizing Crawls
 

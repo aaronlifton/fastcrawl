@@ -302,6 +302,7 @@ fn run_multi_thread(cli: Cli, seeds: &[&str], filter: UrlFilter) -> Result<(), D
         .remote_batch_size
         .unwrap_or(DEFAULT_REMOTE_BATCH_SIZE)
         .max(1);
+    let remote_channel_logs = partition_settings.remote_channel_logs;
     let seeds_owned: Vec<String> = seeds.iter().map(|s| s.to_string()).collect();
     let start = Instant::now();
 
@@ -335,6 +336,7 @@ fn run_multi_thread(cli: Cli, seeds: &[&str], filter: UrlFilter) -> Result<(), D
                 senders_clone,
                 receiver,
                 remote_batch_size,
+                remote_channel_logs,
             )))
         })?);
     }
@@ -359,6 +361,7 @@ async fn run_shard_streaming(
     remotes: Arc<Vec<mpsc::Sender<LinkBatch>>>,
     inbox: mpsc::Receiver<LinkBatch>,
     remote_batch_size: usize,
+    remote_channel_logs: bool,
 ) -> Result<(), DynError> {
     let state = AppState::new_with_shared(filter, &shared)?;
     seed_partitioned_frontier(state.frontier.as_ref(), &seeds, &partition).await;
@@ -383,7 +386,12 @@ async fn run_shard_streaming(
         })
     };
 
-    let router = Arc::new(ShardRouter::new(partition, remotes, remote_batch_size));
+    let router = Arc::new(ShardRouter::new(
+        partition,
+        remotes,
+        remote_batch_size,
+        remote_channel_logs,
+    ));
     let mut workers = Vec::new();
     for id in 0..DEFAULT_AGENT_CAPACITY {
         workers.push(spawn_streaming_worker_sharded(
@@ -828,6 +836,7 @@ struct ShardRouter {
     remotes: Arc<Vec<mpsc::Sender<LinkBatch>>>,
     batch_size: usize,
     buffers: Arc<RemoteBuffers>,
+    log_channel_drop: bool,
 }
 
 #[cfg(feature = "multi_thread")]
@@ -836,12 +845,14 @@ impl ShardRouter {
         partition: ShardPartition,
         remotes: Arc<Vec<mpsc::Sender<LinkBatch>>>,
         batch_size: usize,
+        log_channel_drop: bool,
     ) -> Self {
         Self {
             partition,
             remotes,
             batch_size: batch_size.max(1),
             buffers: Arc::new(RemoteBuffers::default()),
+            log_channel_drop,
         }
     }
 
@@ -876,10 +887,12 @@ impl ShardRouter {
         if let Some(sender) = self.remotes.get(shard) {
             let count = links.len();
             if sender.send(LinkBatch { depth, links }).await.is_err() {
-                eprintln!(
-                    "shard {}: remote shard {shard} channel closed",
-                    self.partition.index()
-                );
+                if self.log_channel_drop {
+                    eprintln!(
+                        "shard {}: remote shard {shard} channel closed",
+                        self.partition.index()
+                    );
+                }
             } else {
                 metrics.record_remote_shard_links(count);
             }
