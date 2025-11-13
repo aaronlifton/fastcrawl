@@ -3,27 +3,33 @@
 use crate::agents::{
     AgentRegistry, CrawlTask, InlineString, DEFAULT_AGENT_CAPACITY, DEFAULT_QUEUE_DEPTH,
 };
+use crate::controls::NormalizationSettings;
 #[cfg(feature = "multi_thread")]
 use crate::controls::{PartitionSettings, PartitionStrategyArg};
 use crate::frontier::{Frontier, FrontierError, DEFAULT_FRONTIER_QUEUE, DEFAULT_FRONTIER_SEEN};
-use crate::html::{stream_links, HtmlStreamError};
+use crate::html::{stream_links, HtmlStreamError, LinkHarvest};
+use crate::normalizer::{
+    FetchedPage, NormalizationConfig, NormalizationError, NormalizedPage, Normalizer,
+};
 use crate::{Cli, CrawlControls};
 use futures_util::future::join_all;
-use reqwest::Client;
-#[cfg(feature = "multi_thread")]
+use reqwest::{header::HeaderMap, Client};
+use serde::Serialize;
 use std::collections::HashMap;
+use std::fmt;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
-#[cfg(feature = "multi_thread")]
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 #[cfg(feature = "multi_thread")]
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
 };
 use tokio::runtime::Builder;
-#[cfg(feature = "multi_thread")]
 use tokio::sync::mpsc;
 #[cfg(feature = "multi_thread")]
 use tokio::sync::Mutex;
@@ -41,6 +47,7 @@ const SHARD_STACK_SIZE: usize = 8 * 1024 * 1024;
 const DEFAULT_REMOTE_BATCH_SIZE: usize = 8;
 #[cfg(feature = "multi_thread")]
 const REMOTE_BUFFER_MAX_IDLE_PAGES: u8 = 4;
+const NORMALIZATION_CHANNEL_CAPACITY: usize = 256;
 
 /// Predicate used to accept or reject discovered URLs.
 pub type UrlFilter = Arc<dyn Fn(&Url) -> bool + Send + Sync>;
@@ -53,17 +60,26 @@ struct SharedRun {
     metrics: Arc<Metrics>,
     controls: Arc<CrawlControls>,
     run_duration: Duration,
+    normalization: Option<Arc<NormalizationHandle>>,
 }
 
 impl SharedRun {
-    fn new(cli: &Cli) -> Self {
-        Self {
+    fn new(cli: &Cli) -> Result<Self, DynError> {
+        let normalization = cli
+            .normalization_settings()
+            .map(|settings| NormalizationHandle::new(settings))
+            .transpose()
+            .map_err(|err| Box::new(err) as DynError)?
+            .map(Arc::new);
+
+        Ok(Self {
             stop_requested: Arc::new(AtomicBool::new(false)),
             active_tasks: Arc::new(AtomicUsize::new(0)),
             metrics: Arc::new(Metrics::default()),
             controls: Arc::new(cli.build_controls()),
             run_duration: cli.run_duration(),
-        }
+            normalization,
+        })
     }
 }
 
@@ -237,10 +253,15 @@ struct AppState {
     client: Client,
     run_duration: Duration,
     link_filter: UrlFilter,
+    normalization: Option<Arc<NormalizationRuntime>>,
 }
 
 impl AppState {
-    fn new_with_shared(filter: UrlFilter, shared: &SharedRun) -> Result<Self, reqwest::Error> {
+    fn new_with_shared(
+        filter: UrlFilter,
+        shared: &SharedRun,
+        shard: Option<usize>,
+    ) -> Result<Self, reqwest::Error> {
         let registry =
             Arc::new(AgentRegistry::<DEFAULT_AGENT_CAPACITY, DEFAULT_QUEUE_DEPTH>::new());
         let frontier = Arc::new(Frontier::<DEFAULT_FRONTIER_QUEUE, DEFAULT_FRONTIER_SEEN>::new());
@@ -249,6 +270,11 @@ impl AppState {
             .redirect(reqwest::redirect::Policy::limited(5))
             .timeout(Duration::from_secs(10))
             .build()?;
+
+        let normalization = shared
+            .normalization
+            .as_ref()
+            .map(|handle| Arc::new(NormalizationRuntime::from_handle(handle.as_ref(), shard)));
 
         Ok(Self {
             registry,
@@ -260,14 +286,15 @@ impl AppState {
             client,
             run_duration: shared.run_duration,
             link_filter: filter,
+            normalization,
         })
     }
 }
 
 #[cfg(not(feature = "multi_thread"))]
 async fn run_single_thread(cli: Cli, seeds: &[&str], filter: UrlFilter) -> Result<(), DynError> {
-    let shared = SharedRun::new(&cli);
-    let state = AppState::new_with_shared(filter, &shared)?;
+    let shared = SharedRun::new(&cli)?;
+    let state = AppState::new_with_shared(filter, &shared, None)?;
     seed_frontier(state.frontier.as_ref(), seeds).await;
     let start = Instant::now();
 
@@ -294,7 +321,7 @@ fn run_multi_thread(cli: Cli, seeds: &[&str], filter: UrlFilter) -> Result<(), D
         .map(|n| n.get())
         .unwrap_or(4)
         .max(1);
-    let shared = SharedRun::new(&cli);
+    let shared = SharedRun::new(&cli)?;
     let partition_settings = cli.partition_settings();
     let partition_kind = PartitionKind::from_settings(partition_settings, shard_count);
     let strategy = Arc::new(ShardStrategy::new(shard_count, partition_kind.clone()));
@@ -363,7 +390,7 @@ async fn run_shard_streaming(
     remote_batch_size: usize,
     remote_channel_logs: bool,
 ) -> Result<(), DynError> {
-    let state = AppState::new_with_shared(filter, &shared)?;
+    let state = AppState::new_with_shared(filter, &shared, Some(partition.index()))?;
     seed_partitioned_frontier(state.frontier.as_ref(), &seeds, &partition).await;
     let start = Instant::now();
 
@@ -445,6 +472,7 @@ fn spawn_streaming_worker(state: &AppState, id: usize) -> tokio::task::JoinHandl
     let metrics = Arc::clone(&state.metrics);
     let controls = Arc::clone(&state.controls);
     let filter = Arc::clone(&state.link_filter);
+    let normalization = state.normalization.clone();
     spawn_local(async move {
         worker_loop_streaming(
             id,
@@ -456,6 +484,7 @@ fn spawn_streaming_worker(state: &AppState, id: usize) -> tokio::task::JoinHandl
             controls,
             metrics,
             filter,
+            normalization,
         )
         .await;
     })
@@ -475,6 +504,7 @@ fn spawn_streaming_worker_sharded(
     let metrics = Arc::clone(&state.metrics);
     let controls = Arc::clone(&state.controls);
     let filter = Arc::clone(&state.link_filter);
+    let normalization = state.normalization.clone();
     spawn_local(async move {
         worker_loop_streaming_sharded(
             id,
@@ -487,6 +517,7 @@ fn spawn_streaming_worker_sharded(
             metrics,
             filter,
             router,
+            normalization,
         )
         .await;
     })
@@ -508,6 +539,7 @@ async fn worker_loop_streaming<
     controls: Arc<CrawlControls>,
     metrics: Arc<Metrics>,
     filter: UrlFilter,
+    normalization: Option<Arc<NormalizationRuntime>>,
 ) {
     let Some(agent) = registry.agent(agent_id) else {
         eprintln!("worker {agent_id}: agent missing");
@@ -524,6 +556,7 @@ async fn worker_loop_streaming<
             Arc::clone(&controls),
             metrics.as_ref(),
             Arc::clone(&filter),
+            normalization.clone(),
         )
         .await
         {
@@ -556,6 +589,7 @@ async fn worker_loop_streaming_sharded<
     metrics: Arc<Metrics>,
     filter: UrlFilter,
     router: Arc<ShardRouter>,
+    normalization: Option<Arc<NormalizationRuntime>>,
 ) {
     let Some(agent) = registry.agent(agent_id) else {
         eprintln!("worker {agent_id}: agent missing");
@@ -573,6 +607,7 @@ async fn worker_loop_streaming_sharded<
             metrics.as_ref(),
             Arc::clone(&filter),
             router.as_ref(),
+            normalization.clone(),
         )
         .await
         {
@@ -596,6 +631,7 @@ async fn handle_task_streaming<const QUEUE: usize, const SEEN: usize>(
     controls: Arc<CrawlControls>,
     metrics: &Metrics,
     filter: UrlFilter,
+    normalization: Option<Arc<NormalizationRuntime>>,
 ) -> Result<(), TaskError> {
     let url = task.url().to_string();
     println!("[depth {}] {}", task.depth(), url);
@@ -620,17 +656,44 @@ async fn handle_task_streaming<const QUEUE: usize, const SEEN: usize>(
     let base_for_links = Arc::new(base.clone());
     let controls_for_links = Arc::clone(&controls);
     let filter_for_links = Arc::clone(&filter);
-    let discovered_links = stream_links(response, controls.max_links_per_page(), move |href| {
-        base_for_links.join(href).ok().filter(|candidate| {
-            candidate
-                .domain()
-                .map(|domain| controls_for_links.is_domain_allowed(domain))
-                .unwrap_or(false)
-                && (filter_for_links.as_ref())(candidate)
-        })
-    })
+    let capture_body = normalization.is_some();
+    let mut header_snapshot = if capture_body {
+        Some(response.headers().clone())
+    } else {
+        None
+    };
+    let status_code = response.status().as_u16();
+    let harvest = stream_links(
+        response,
+        controls.max_links_per_page(),
+        capture_body,
+        move |href| {
+            base_for_links.join(href).ok().filter(|candidate| {
+                candidate
+                    .domain()
+                    .map(|domain| controls_for_links.is_domain_allowed(domain))
+                    .unwrap_or(false)
+                    && (filter_for_links.as_ref())(candidate)
+            })
+        },
+    )
     .await
     .map_err(|err| TaskError::html(&url, err))?;
+
+    let LinkHarvest {
+        links: discovered_links,
+        body,
+    } = harvest;
+
+    if let Some(runtime) = normalization {
+        if let Some(body) = body {
+            let headers = header_snapshot.take().unwrap_or_else(HeaderMap::new);
+            runtime
+                .process(base, task.depth(), status_code, headers, body)
+                .await
+                .map_err(|err| TaskError::normalize(&url, err))?;
+        }
+    }
 
     if task.depth() >= controls.max_depth() {
         return Ok(());
@@ -659,6 +722,7 @@ async fn handle_task_streaming_sharded<const QUEUE: usize, const SEEN: usize>(
     metrics: &Metrics,
     filter: UrlFilter,
     router: &ShardRouter,
+    normalization: Option<Arc<NormalizationRuntime>>,
 ) -> Result<(), TaskError> {
     let url = task.url().to_string();
     println!("[depth {}] {}", task.depth(), url);
@@ -683,17 +747,44 @@ async fn handle_task_streaming_sharded<const QUEUE: usize, const SEEN: usize>(
     let base_for_links = Arc::new(base.clone());
     let controls_for_links = Arc::clone(&controls);
     let filter_for_links = Arc::clone(&filter);
-    let discovered_links = stream_links(response, controls.max_links_per_page(), move |href| {
-        base_for_links.join(href).ok().filter(|candidate| {
-            candidate
-                .domain()
-                .map(|domain| controls_for_links.is_domain_allowed(domain))
-                .unwrap_or(false)
-                && (filter_for_links.as_ref())(candidate)
-        })
-    })
+    let capture_body = normalization.is_some();
+    let mut header_snapshot = if capture_body {
+        Some(response.headers().clone())
+    } else {
+        None
+    };
+    let status_code = response.status().as_u16();
+    let harvest = stream_links(
+        response,
+        controls.max_links_per_page(),
+        capture_body,
+        move |href| {
+            base_for_links.join(href).ok().filter(|candidate| {
+                candidate
+                    .domain()
+                    .map(|domain| controls_for_links.is_domain_allowed(domain))
+                    .unwrap_or(false)
+                    && (filter_for_links.as_ref())(candidate)
+            })
+        },
+    )
     .await
     .map_err(|err| TaskError::html(&url, err))?;
+
+    let LinkHarvest {
+        links: discovered_links,
+        body,
+    } = harvest;
+
+    if let Some(runtime) = normalization {
+        if let Some(body) = body {
+            let headers = header_snapshot.take().unwrap_or_else(HeaderMap::new);
+            runtime
+                .process(base, task.depth(), status_code, headers, body)
+                .await
+                .map_err(|err| TaskError::normalize(&url, err))?;
+        }
+    }
 
     if task.depth() >= controls.max_depth() || discovered_links.is_empty() {
         return Ok(());
@@ -1008,6 +1099,170 @@ async fn shard_inbox_loop<const QUEUE: usize, const SEEN: usize>(
     }
 }
 
+struct NormalizationHandle {
+    config: NormalizationConfig,
+    sender: mpsc::Sender<NormalizedPage>,
+}
+
+impl NormalizationHandle {
+    fn new(settings: NormalizationSettings) -> io::Result<Self> {
+        let page_sink = JsonlSink::new(settings.output_path)?;
+        let manifest_sink = match settings.manifest_path {
+            Some(path) => Some(JsonlSink::new(path)?),
+            None => None,
+        };
+        let (sender, receiver) = mpsc::channel(NORMALIZATION_CHANNEL_CAPACITY);
+
+        thread::Builder::new()
+            .name("fastcrawl-normalize-writer".into())
+            .spawn(move || {
+                let mut receiver = receiver;
+                let manifest_sink = manifest_sink;
+                let mut digests: HashMap<String, (u32, u64)> = HashMap::new();
+                while let Some(page) = receiver.blocking_recv() {
+                    if let Err(err) = page_sink.write_json(&page) {
+                        eprintln!("normalization writer error: {err}");
+                    }
+                    if let Some(sink) = manifest_sink.as_ref() {
+                        let record = DigestRecord::new(&page, &mut digests);
+                        if let Err(err) = sink.write_json(&record) {
+                            eprintln!("normalization manifest error: {err}");
+                        }
+                    }
+                }
+            })
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+
+        Ok(Self {
+            config: settings.config,
+            sender,
+        })
+    }
+}
+
+#[derive(Clone)]
+struct NormalizationRuntime {
+    shard: Option<usize>,
+    normalizer: Normalizer,
+    sender: mpsc::Sender<NormalizedPage>,
+}
+
+impl NormalizationRuntime {
+    fn from_handle(handle: &NormalizationHandle, shard: Option<usize>) -> Self {
+        Self {
+            shard,
+            normalizer: Normalizer::new(handle.config),
+            sender: handle.sender.clone(),
+        }
+    }
+
+    async fn process(
+        &self,
+        url: Url,
+        depth: u8,
+        status: u16,
+        headers: HeaderMap,
+        body: Vec<u8>,
+    ) -> Result<(), NormalizationJobError> {
+        let mut page = FetchedPage::new(url, depth, SystemTime::now(), status, headers, body);
+        if let Some(shard) = self.shard {
+            page = page.with_shard(shard);
+        }
+
+        let normalized = self
+            .normalizer
+            .normalize(&page)
+            .map_err(NormalizationJobError::Normalize)?;
+
+        self.sender
+            .send(normalized)
+            .await
+            .map_err(|err| NormalizationJobError::Channel(err.0.metadata.url.to_string()))
+            .map(|_| ())
+    }
+}
+
+#[derive(Debug)]
+enum NormalizationJobError {
+    Normalize(NormalizationError),
+    Channel(String),
+}
+
+impl fmt::Display for NormalizationJobError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Normalize(err) => write!(f, "normalization failed: {err}"),
+            Self::Channel(url) => write!(f, "normalization channel closed for {url}"),
+        }
+    }
+}
+
+impl std::error::Error for NormalizationJobError {}
+
+struct JsonlSink {
+    file: std::sync::Mutex<std::fs::File>,
+}
+
+impl JsonlSink {
+    fn new(path: impl AsRef<Path>) -> io::Result<Self> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)?;
+        Ok(Self {
+            file: std::sync::Mutex::new(file),
+        })
+    }
+
+    fn write_json<T: Serialize>(&self, value: &T) -> io::Result<()> {
+        let mut guard = self
+            .file
+            .lock()
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "normalization writer poisoned"))?;
+        serde_json::to_writer(&mut *guard, value)
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        guard.write_all(b"\n")?;
+        Ok(())
+    }
+}
+
+#[derive(Serialize)]
+struct DigestRecord {
+    url: String,
+    checksum: u32,
+    last_seen_epoch_ms: u64,
+    changed: bool,
+}
+
+impl DigestRecord {
+    fn new(page: &NormalizedPage, digests: &mut HashMap<String, (u32, u64)>) -> Self {
+        let meta = &page.metadata;
+        let fetched_ms = meta
+            .fetched_at
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|dur| dur.as_millis() as u64)
+            .unwrap_or(0);
+        let url = meta.url.to_string();
+        let previous = digests.insert(url.clone(), (meta.checksum, fetched_ms));
+        let changed = previous
+            .map(|(checksum, _)| checksum != meta.checksum)
+            .unwrap_or(true);
+        Self {
+            url,
+            checksum: meta.checksum,
+            last_seen_epoch_ms: fetched_ms,
+            changed,
+        }
+    }
+}
+
 #[cfg(not(feature = "multi_thread"))]
 async fn seed_frontier(
     frontier: &Frontier<DEFAULT_FRONTIER_QUEUE, DEFAULT_FRONTIER_SEEN>,
@@ -1103,7 +1358,7 @@ impl Metrics {
             TaskErrorKind::Frontier => {
                 self.frontier_rejections.fetch_add(1, Ordering::Relaxed);
             }
-            TaskErrorKind::Html => {
+            TaskErrorKind::Html | TaskErrorKind::Normalize => {
                 self.parse_errors.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -1168,6 +1423,7 @@ enum TaskErrorKind {
     Parse,
     Frontier,
     Html,
+    Normalize,
 }
 
 struct TaskError {
@@ -1206,6 +1462,14 @@ impl TaskError {
             url: Some(url.to_string()),
             message: format!("html rewrite error: {err}"),
             kind: TaskErrorKind::Html,
+        }
+    }
+
+    fn normalize(url: &str, err: NormalizationJobError) -> Self {
+        Self {
+            url: Some(url.to_string()),
+            message: err.to_string(),
+            kind: TaskErrorKind::Normalize,
         }
     }
 }

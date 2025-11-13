@@ -340,11 +340,14 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "clap_builder",
+ "crc32fast",
  "futures-util",
  "heapless",
  "lol_html",
  "reqwest",
  "scraper",
+ "serde",
+ "serde_json",
  "tokio",
  "url",
 ]

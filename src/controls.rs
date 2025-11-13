@@ -1,8 +1,10 @@
 //! Crawl throttle and filtering controls shared across executors.
 
+use crate::normalizer::NormalizationConfig;
 use clap::Parser;
 #[cfg(feature = "multi_thread")]
 use clap::ValueEnum;
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Tunable knobs that bound crawl behavior.
@@ -91,6 +93,34 @@ pub struct Cli {
     #[arg(long, env = "FASTCRAWL_DOMAINS", default_value = "en.wikipedia.org")]
     pub allowed_domains: String,
 
+    /// Enable corpus normalization pipeline and JSONL output
+    #[arg(long, env = "FASTCRAWL_NORMALIZE", default_value_t = false)]
+    pub normalize: bool,
+
+    /// Output path for normalized JSONL batches (overwrites existing file)
+    #[arg(
+        long,
+        env = "FASTCRAWL_NORMALIZE_JSONL",
+        default_value = "normalized_pages.jsonl"
+    )]
+    pub normalize_jsonl: String,
+
+    /// Optional manifest JSONL capturing per-URL digests (checksum + last seen)
+    #[arg(long, env = "FASTCRAWL_NORMALIZE_MANIFEST")]
+    pub normalize_manifest_jsonl: Option<PathBuf>,
+
+    /// Target tokens per chunk emitted by the normalizer
+    #[arg(long, env = "FASTCRAWL_NORMALIZE_TOKENS", default_value_t = 256)]
+    pub normalize_chunk_tokens: usize,
+
+    /// Token overlap between neighboring chunks
+    #[arg(long, env = "FASTCRAWL_NORMALIZE_OVERLAP", default_value_t = 48)]
+    pub normalize_overlap_tokens: usize,
+
+    /// Maximum text blocks to keep before truncating normalization
+    #[arg(long, env = "FASTCRAWL_NORMALIZE_MAX_BLOCKS", default_value_t = 8192)]
+    pub normalize_max_blocks: usize,
+
     /// Shard partitioning strategy (multi-thread feature only)
     #[cfg(feature = "multi_thread")]
     #[arg(long, env = "FASTCRAWL_PARTITION", default_value = "hash")]
@@ -131,6 +161,29 @@ impl Cli {
     /// Returns the requested run duration.
     pub fn run_duration(&self) -> Duration {
         Duration::from_secs(self.duration_secs)
+    }
+
+    /// Returns normalization settings when enabled.
+    pub fn normalization_settings(&self) -> Option<NormalizationSettings> {
+        if !self.normalize {
+            return None;
+        }
+
+        let chunk_target = self.normalize_chunk_tokens.max(1);
+        let chunk_overlap = self
+            .normalize_overlap_tokens
+            .min(chunk_target.saturating_sub(1));
+        let max_blocks = self.normalize_max_blocks.max(1);
+
+        Some(NormalizationSettings {
+            output_path: PathBuf::from(&self.normalize_jsonl),
+            manifest_path: self.normalize_manifest_jsonl.clone(),
+            config: NormalizationConfig {
+                chunk_target_tokens: chunk_target,
+                chunk_overlap_tokens: chunk_overlap,
+                max_blocks,
+            },
+        })
     }
 
     fn domains_vec(&self) -> Vec<String> {
@@ -178,4 +231,15 @@ pub struct PartitionSettings {
     pub remote_batch_size: Option<usize>,
     /// Whether to log channel-closed warnings for cross-shard sends.
     pub remote_channel_logs: bool,
+}
+
+/// Settings controlling corpus normalization outputs.
+#[derive(Debug, Clone)]
+pub struct NormalizationSettings {
+    /// Filesystem path that will receive newline-delimited JSON.
+    pub output_path: PathBuf,
+    /// Optional path for digest manifest records.
+    pub manifest_path: Option<PathBuf>,
+    /// Chunking/cleanup configuration applied to each page.
+    pub config: NormalizationConfig,
 }

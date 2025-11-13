@@ -7,21 +7,34 @@ use std::error::Error;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
+/// Result of streaming link extraction.
+pub struct LinkHarvest<T> {
+    /// Accepted links transformed by the caller.
+    pub links: Vec<T>,
+    /// Optional raw body bytes captured during streaming.
+    pub body: Option<Vec<u8>>,
+}
+
 /// Streams anchor tags from an HTTP response, transforming matching `href` values with `transform`.
 ///
 /// The `transform` closure runs for every `href`; returning `Some(T)` keeps the value, `None` skips
-/// it. Only accepted entries count against `limit`.
+/// it. Only accepted entries count against `limit`. When `capture_body` is true the full response
+/// body is buffered and returned alongside the discovered links.
 pub async fn stream_links<T, F>(
     response: Response,
     limit: usize,
+    capture_body: bool,
     transform: F,
-) -> Result<Vec<T>, HtmlStreamError>
+) -> Result<LinkHarvest<T>, HtmlStreamError>
 where
     T: Send + 'static,
     F: Fn(&str) -> Option<T> + Send + Sync + 'static,
 {
-    if limit == 0 {
-        return Ok(Vec::new());
+    if limit == 0 && !capture_body {
+        return Ok(LinkHarvest {
+            links: Vec::new(),
+            body: None,
+        });
     }
 
     let values: Arc<Mutex<Vec<T>>> = Arc::new(Mutex::new(Vec::new()));
@@ -54,8 +67,12 @@ where
     );
 
     let mut stream = response.bytes_stream();
+    let mut body_buf = capture_body.then(Vec::new);
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(HtmlStreamError::Http)?;
+        if let Some(buf) = body_buf.as_mut() {
+            buf.extend_from_slice(&chunk);
+        }
         rewriter.write(&chunk).map_err(HtmlStreamError::Rewrite)?;
     }
     rewriter.end().map_err(HtmlStreamError::Rewrite)?;
@@ -67,7 +84,10 @@ where
         .into_inner()
         .map_err(|_| HtmlStreamError::CollectorPoisoned)?;
 
-    Ok(collected)
+    Ok(LinkHarvest {
+        links: collected,
+        body: body_buf,
+    })
 }
 
 /// Errors surfaced while streaming HTML.

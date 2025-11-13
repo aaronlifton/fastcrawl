@@ -101,12 +101,34 @@ cargo run --example wiki --features multi_thread -- --duration-secs 60
 - Metrics live in `src/runtime.rs` and can be extended if you need additional counters or telemetry sinks. Multi-thread
   runs also report `local shard enqueues` vs `remote shard links (batches)` so you can gauge partition efficiency.
 
+## Corpus Normalization
+
+Pass `--normalize` to stream every fetched page through the new `Normalizer` service. The pipeline writes newline-
+delimited JSON (metadata + cleaned text blocks + embedding-ready chunks) to `--normalize-jsonl` (default:
+`normalized_pages.jsonl`) and respects additional knobs:
+
+```
+cargo run --example wiki -- \
+  --normalize \
+  --normalize-jsonl data/wiki.jsonl \
+  --normalize-manifest-jsonl data/wiki_manifest.jsonl \
+  --normalize-chunk-tokens 384 \
+  --normalize-overlap-tokens 64
+```
+
+Chunk and block bounds can be tuned via `--normalize-chunk-tokens`, `--normalize-overlap-tokens`, and
+`--normalize-max-blocks`. The JSON payload includes per-block heading context, content hashes, token estimates, and
+metadata such as HTTP status, language hints, and shard ownership so downstream embedding/indexing jobs can ingest it
+directly. When `--normalize-manifest-jsonl` is set, the runtime also appends digest records (`url`, `checksum`,
+`last_seen_epoch_ms`, `changed`) so incremental pipelines can diff and skip re-embedding unchanged pages.
+
 ## LLM-Oriented Next Steps
 
 Fastcrawl is already a solid content harvester for downstream ML pipelines. Future work aimed at LLM/RAG workflows
 includes:
 
-1. **Corpus normalization** – strip boilerplate, capture metadata, and chunk pages into consistent token windows.
+- [x] **Corpus normalization** – strip boilerplate, capture metadata, and chunk pages into consistent token windows.
+
 2. **Embedding pipeline** – push cleaned chunks through an embedding model and store vectors (pgvector/Qdrant/Milvus)
    with provenance.
 3. **Incremental refresh** – schedule revisits, diff pages, and update embeddings so the knowledge base stays current.
