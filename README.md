@@ -4,25 +4,26 @@ Fastcrawl is a polite, configurable web-crawler focused on continuous streaming 
 Wikipedia example (`examples/wiki.rs`) that demonstrates how to plug custom link filters and crawl controls into the
 core runtime.
 
-Current fastest speed, with default controls of `max-depth` 4, `max-links-per-page` 16, `politeness-ms` 250, and
-`partition-strategy` 'wiki-prefix' (instead of 'hash') is **52.69 pages/sec**.
+Current fastest speed, with default controls of `max-depth` 4, `max-links-per-page` 16, `politeness-ms` 250,
+`partition-strategy` 'wiki-prefix' (instead of 'hash'), and `duration-secs` 4 (it crawls for 4 seconds, but any enqued
+link is still awaited, so it runs for approximately 30 sec.) is **68.98 pages/sec**.
 
 ## Metrics
 
-When running `cargo run --example wiki --features multi_thread -- --duration-secs 1 --partition wiki-prefix`:
+When running `cargo run --example wiki --features multi_thread -- --duration-secs 4 --partition wiki-prefix`:
 
 ```
---- crawl metrics (4.00s) ---
-pages fetched: 211
-urls fetched/sec: 52.69
-urls discovered: 388
-urls enqueued: 207
-duplicate skips: 181
+--- crawl metrics (29.43s) ---
+pages fetched: 2030
+urls fetched/sec: 68.98
+urls discovered: 4844
+urls enqueued: 2026
+duplicate skips: 2818
 frontier rejects: 0
 http errors: 0
 url parse errors: 0
-local shard enqueues: 1301
-remote shard links: 277 (batches 114)
+local shard enqueues: 9315
+remote shard links: 3039 (batches 1442)
 ```
 
 ## Highlights
