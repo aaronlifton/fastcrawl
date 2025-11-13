@@ -531,6 +531,7 @@ async fn worker_loop_streaming<
 }
 
 #[cfg(feature = "multi_thread")]
+#[allow(clippy::too_many_arguments)]
 async fn worker_loop_streaming_sharded<
     const COUNT: usize,
     const DEPTH: usize,
@@ -640,6 +641,7 @@ async fn handle_task_streaming<const QUEUE: usize, const SEEN: usize>(
 }
 
 #[cfg(feature = "multi_thread")]
+#[allow(clippy::too_many_arguments)]
 async fn handle_task_streaming_sharded<const QUEUE: usize, const SEEN: usize>(
     client: &Client,
     frontier: Arc<Frontier<QUEUE, SEEN>>,
@@ -761,6 +763,7 @@ async fn enqueue_discovered_links<const QUEUE: usize, const SEEN: usize>(
 }
 
 #[cfg(feature = "multi_thread")]
+#[allow(clippy::too_many_arguments)]
 async fn route_discovered_links<const QUEUE: usize, const SEEN: usize>(
     router: &ShardRouter,
     frontier: Arc<Frontier<QUEUE, SEEN>>,
