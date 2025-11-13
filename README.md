@@ -25,17 +25,17 @@ When running
 The crawl metrics were:
 
 ```
---- crawl metrics (26.46s) ---
-pages fetched: 1904
-urls fetched/sec: 71.95
-urls discovered: 4351
-urls enqueued: 1900
-duplicate skips: 2451
+--- crawl metrics (26.61s) ---
+pages fetched: 1999
+urls fetched/sec: 75.12
+urls discovered: 4517
+urls enqueued: 1995
+duplicate skips: 2522
 frontier rejects: 0
 http errors: 0
 url parse errors: 0
-local shard enqueues: 7870
-remote shard links: 2718 (batches 331)
+local shard enqueues: 7889
+remote shard links: 2739 (batches 344)
 ```
 
 ## Highlights
