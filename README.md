@@ -4,13 +4,34 @@ Fastcrawl is a polite, configurable web-crawler focused on continuous streaming 
 Wikipedia example (`examples/wiki.rs`) that demonstrates how to plug custom link filters and crawl controls into the
 core runtime.
 
+Current fastest speed, with default controls of `max-depth` 4, `max-links-per-page` 16, `politeness-ms` 250, and
+`partition-strategy` 'wiki-prefix' (instead of 'hash') is **52.69 pages/sec**.
+
+## Metrics
+
+When running `cargo run --example wiki --features multi_thread -- --duration-secs 1 --partition wiki-prefix`:
+
+```
+--- crawl metrics (4.00s) ---
+pages fetched: 211
+urls fetched/sec: 52.69
+urls discovered: 388
+urls enqueued: 207
+duplicate skips: 181
+frontier rejects: 0
+http errors: 0
+url parse errors: 0
+local shard enqueues: 1301
+remote shard links: 277 (batches 114)
+```
+
 ## Highlights
 
 - **Streaming-first parsing.** The default build runs entirely on a single Tokio thread with `lol_html`, harvesting
   links as bytes arrive so memory stays bounded to the current response.
 - **Sharded multi-thread mode.** Enable the `multi_thread` feature to spin up several single-thread runtimes in
-  parallel. Each shard owns its own frontier and exchanges cross-shard links over Tokio channels, which keeps
-  contention low while scaling to multiple cores.
+  parallel. Each shard owns its own frontier and exchanges cross-shard links over Tokio channels, which keeps contention
+  low while scaling to multiple cores.
 - **Deterministic politeness.** `CrawlControls` exposes depth limits, per-domain allow lists, politeness delays, and
   other knobs so you never need to edit the example binary to tweak behavior.
 - **Actionable metrics.** Every run prints pages fetched, URLs/sec, dedupe counts, and error totals so you can tune the
@@ -50,6 +71,7 @@ cargo run --example wiki --features multi_thread -- --duration-secs 60
 - Each shard runs the same streaming workers as single-thread mode but owns a unique frontier and Bloom filter.
 - Cross-shard discoveries are routed through bounded mpsc channels, so enqueue contention happens on a single consumer
   instead of every worker.
+- Pass `--partition wiki-prefix` (default: `hash`) to keep Wikipedia articles with similar prefixes on the same shard.
 
 ## Customizing Crawls
 
@@ -78,4 +100,3 @@ includes:
 ## License
 
 Copyright © 2025 Aaron Lifton
-

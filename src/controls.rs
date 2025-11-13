@@ -1,6 +1,8 @@
 //! Crawl throttle and filtering controls shared across executors.
 
 use clap::Parser;
+#[cfg(feature = "multi_thread")]
+use clap::ValueEnum;
 use std::time::Duration;
 
 /// Tunable knobs that bound crawl behavior.
@@ -88,6 +90,11 @@ pub struct Cli {
     /// Domain allowlist, comma separated
     #[arg(long, env = "FASTCRAWL_DOMAINS", default_value = "en.wikipedia.org")]
     pub allowed_domains: String,
+
+    /// Shard partitioning strategy (multi-thread feature only)
+    #[cfg(feature = "multi_thread")]
+    #[arg(long, env = "FASTCRAWL_PARTITION", default_value = "hash")]
+    pub partition: PartitionStrategyArg,
 }
 
 impl Cli {
@@ -113,4 +120,20 @@ impl Cli {
             .filter(|s| !s.is_empty())
             .collect()
     }
+
+    #[cfg(feature = "multi_thread")]
+    /// Returns the requested sharding strategy when multi-threading is enabled.
+    pub fn partition_strategy(&self) -> PartitionStrategyArg {
+        self.partition
+    }
+}
+
+#[cfg(feature = "multi_thread")]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+/// Strategies for assigning discovered URLs to shards in multi-thread mode.
+pub enum PartitionStrategyArg {
+    /// Hash URLs evenly across shards (default).
+    Hash,
+    /// Use Wikipedia-style namespace/title prefixes to keep related pages together.
+    WikiPrefix,
 }

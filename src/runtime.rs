@@ -3,6 +3,8 @@
 use crate::agents::{
     AgentRegistry, CrawlTask, InlineString, DEFAULT_AGENT_CAPACITY, DEFAULT_QUEUE_DEPTH,
 };
+#[cfg(feature = "multi_thread")]
+use crate::controls::PartitionStrategyArg;
 use crate::frontier::{Frontier, FrontierError, DEFAULT_FRONTIER_QUEUE, DEFAULT_FRONTIER_SEEN};
 use crate::html::{stream_links, HtmlStreamError};
 use crate::{Cli, CrawlControls};
@@ -15,6 +17,11 @@ use std::sync::Arc;
 #[cfg(feature = "multi_thread")]
 use std::thread;
 use std::time::{Duration, Instant};
+#[cfg(feature = "multi_thread")]
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+};
 use tokio::runtime::Builder;
 #[cfg(feature = "multi_thread")]
 use tokio::sync::mpsc;
@@ -26,6 +33,8 @@ const USER_AGENT: &str = "fastcrawl-example/0.1 (+https://github.com/aaronlifton
 const DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
 #[cfg(feature = "multi_thread")]
 const LINK_BATCH_CHANNEL_CAPACITY: usize = DEFAULT_AGENT_CAPACITY * 4;
+#[cfg(feature = "multi_thread")]
+const SHARD_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 /// Predicate used to accept or reject discovered URLs.
 pub type UrlFilter = Arc<dyn Fn(&Url) -> bool + Send + Sync>;
@@ -53,40 +62,102 @@ impl SharedRun {
 }
 
 #[cfg(feature = "multi_thread")]
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct ShardPartition {
     index: usize,
-    total: usize,
+    strategy: Arc<ShardStrategy>,
 }
 
 #[cfg(feature = "multi_thread")]
 impl ShardPartition {
-    fn new(index: usize, total: usize) -> Self {
-        Self { index, total }
+    fn new(index: usize, strategy: Arc<ShardStrategy>) -> Self {
+        Self { index, strategy }
     }
 
-    fn owner_for(url: &Url, total: usize) -> usize {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        url.as_str().hash(&mut hasher);
-        (hasher.finish() as usize) % total.max(1)
+    fn shard_for_url(&self, url: &Url) -> usize {
+        self.strategy.owner_for(url)
     }
 
-    fn owner_for_str(input: &str, total: usize) -> usize {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        input.hash(&mut hasher);
-        (hasher.finish() as usize) % total.max(1)
-    }
-
-    fn total(&self) -> usize {
-        self.total
+    fn shard_for_str(&self, value: &str) -> usize {
+        self.strategy.owner_for_str(value)
     }
 
     fn index(&self) -> usize {
         self.index
+    }
+}
+
+#[cfg(feature = "multi_thread")]
+#[derive(Clone)]
+struct ShardStrategy {
+    total: usize,
+    kind: PartitionKind,
+}
+
+#[cfg(feature = "multi_thread")]
+impl ShardStrategy {
+    fn new(total: usize, kind: PartitionKind) -> Self {
+        Self {
+            total: total.max(1),
+            kind,
+        }
+    }
+
+    fn owner_for(&self, url: &Url) -> usize {
+        match self.kind {
+            PartitionKind::Hash => Self::hash(url.as_str(), self.total),
+            PartitionKind::WikiPrefix => self
+                .wiki_bucket(url)
+                .unwrap_or_else(|| Self::hash(url.as_str(), self.total)),
+        }
+    }
+
+    fn owner_for_str(&self, value: &str) -> usize {
+        Url::parse(value)
+            .ok()
+            .map(|url| self.owner_for(&url))
+            .unwrap_or_else(|| Self::hash(value, self.total))
+    }
+
+    fn wiki_bucket(&self, url: &Url) -> Option<usize> {
+        if !url
+            .domain()
+            .map(|d| d.contains("wikipedia.org"))
+            .unwrap_or(false)
+        {
+            return None;
+        }
+        let slug = url.path().strip_prefix("/wiki/")?;
+        let first = slug.chars().next()?;
+        if first.is_ascii_alphabetic() {
+            let idx = (first.to_ascii_uppercase() as u8 - b'A') as usize;
+            Some(idx % self.total)
+        } else {
+            None
+        }
+    }
+
+    fn hash(value: &str, total: usize) -> usize {
+        let mut hasher = DefaultHasher::new();
+        value.hash(&mut hasher);
+        (hasher.finish() as usize) % total.max(1)
+    }
+}
+
+#[cfg(feature = "multi_thread")]
+#[derive(Clone, Copy)]
+enum PartitionKind {
+    Hash,
+    WikiPrefix,
+}
+
+#[cfg(feature = "multi_thread")]
+impl From<PartitionStrategyArg> for PartitionKind {
+    fn from(value: PartitionStrategyArg) -> Self {
+        match value {
+            PartitionStrategyArg::Hash => PartitionKind::Hash,
+            PartitionStrategyArg::WikiPrefix => PartitionKind::WikiPrefix,
+        }
     }
 }
 
@@ -169,12 +240,13 @@ async fn run_single_thread(cli: Cli, seeds: &[&str], filter: UrlFilter) -> Resul
 
 #[cfg(feature = "multi_thread")]
 fn run_multi_thread(cli: Cli, seeds: &[&str], filter: UrlFilter) -> Result<(), DynError> {
-    const SHARD_STACK_SIZE: usize = 8 * 1024 * 1024;
     let shard_count = thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
         .max(1);
     let shared = SharedRun::new(&cli);
+    let partition_kind = PartitionKind::from(cli.partition_strategy());
+    let strategy = Arc::new(ShardStrategy::new(shard_count, partition_kind));
     let seeds_owned: Vec<String> = seeds.iter().map(|s| s.to_string()).collect();
     let start = Instant::now();
 
@@ -193,6 +265,7 @@ fn run_multi_thread(cli: Cli, seeds: &[&str], filter: UrlFilter) -> Result<(), D
         let filter_clone = Arc::clone(&filter);
         let senders_clone = Arc::clone(&senders);
         let seeds_clone = seeds_owned.clone();
+        let partition = ShardPartition::new(index, Arc::clone(&strategy));
         let builder = thread::Builder::new()
             .name(format!("fastcrawl-shard-{index}"))
             .stack_size(SHARD_STACK_SIZE);
@@ -203,7 +276,7 @@ fn run_multi_thread(cli: Cli, seeds: &[&str], filter: UrlFilter) -> Result<(), D
                 seeds_clone,
                 filter_clone,
                 shared_clone,
-                ShardPartition::new(index, shard_count),
+                partition,
                 senders_clone,
                 receiver,
             )))
@@ -231,7 +304,7 @@ async fn run_shard_streaming(
     inbox: mpsc::Receiver<LinkBatch>,
 ) -> Result<(), DynError> {
     let state = AppState::new_with_shared(filter, &shared)?;
-    seed_partitioned_frontier(state.frontier.as_ref(), &seeds, partition).await;
+    seed_partitioned_frontier(state.frontier.as_ref(), &seeds, &partition).await;
     let start = Instant::now();
 
     let dispatcher = {
@@ -646,7 +719,7 @@ async fn route_discovered_links<const QUEUE: usize, const SEEN: usize>(
     let mut local_links = Vec::new();
     let mut remote: HashMap<usize, Vec<Url>> = HashMap::new();
     for link in discovered_links {
-        let owner = ShardPartition::owner_for(&link, router.partition.total());
+        let owner = router.partition.shard_for_url(&link);
         if owner == router.partition.index() {
             local_links.push(link);
         } else {
@@ -655,6 +728,7 @@ async fn route_discovered_links<const QUEUE: usize, const SEEN: usize>(
     }
 
     if !local_links.is_empty() {
+        metrics.record_local_shard_links(local_links.len());
         enqueue_discovered_links(
             local_links,
             parent_depth,
@@ -669,6 +743,7 @@ async fn route_discovered_links<const QUEUE: usize, const SEEN: usize>(
 
     for (shard, links) in remote {
         if let Some(sender) = router.remotes.get(shard) {
+            let batch_len = links.len();
             if sender
                 .send(LinkBatch {
                     depth: parent_depth,
@@ -681,6 +756,8 @@ async fn route_discovered_links<const QUEUE: usize, const SEEN: usize>(
                     "shard {}: remote shard {shard} channel closed",
                     router.partition.index()
                 );
+            } else {
+                metrics.record_remote_shard_links(batch_len);
             }
         }
     }
@@ -763,10 +840,10 @@ async fn seed_frontier(
 async fn seed_partitioned_frontier(
     frontier: &Frontier<DEFAULT_FRONTIER_QUEUE, DEFAULT_FRONTIER_SEEN>,
     seeds: &[String],
-    partition: ShardPartition,
+    partition: &ShardPartition,
 ) {
     for seed in seeds {
-        let owner = ShardPartition::owner_for_str(seed, partition.total());
+        let owner = partition.shard_for_str(seed);
         if owner != partition.index() {
             continue;
         }
@@ -805,6 +882,12 @@ struct Metrics {
     frontier_rejections: AtomicUsize,
     http_errors: AtomicUsize,
     parse_errors: AtomicUsize,
+    #[cfg(feature = "multi_thread")]
+    local_shard_links: AtomicUsize,
+    #[cfg(feature = "multi_thread")]
+    remote_shard_links: AtomicUsize,
+    #[cfg(feature = "multi_thread")]
+    remote_batches: AtomicUsize,
 }
 
 impl Metrics {
@@ -841,6 +924,17 @@ impl Metrics {
         }
     }
 
+    #[cfg(feature = "multi_thread")]
+    fn record_local_shard_links(&self, count: usize) {
+        self.local_shard_links.fetch_add(count, Ordering::Relaxed);
+    }
+
+    #[cfg(feature = "multi_thread")]
+    fn record_remote_shard_links(&self, count: usize) {
+        self.remote_shard_links.fetch_add(count, Ordering::Relaxed);
+        self.remote_batches.fetch_add(1, Ordering::Relaxed);
+    }
+
     fn report(&self, elapsed: Duration) {
         let secs = elapsed.as_secs_f32().max(f32::EPSILON);
         let fetched = self.pages_fetched.load(Ordering::Relaxed);
@@ -868,6 +962,18 @@ impl Metrics {
             "url parse errors: {}",
             self.parse_errors.load(Ordering::Relaxed)
         );
+        #[cfg(feature = "multi_thread")]
+        {
+            println!(
+                "local shard enqueues: {}",
+                self.local_shard_links.load(Ordering::Relaxed)
+            );
+            println!(
+                "remote shard links: {} (batches {})",
+                self.remote_shard_links.load(Ordering::Relaxed),
+                self.remote_batches.load(Ordering::Relaxed)
+            );
+        }
     }
 }
 
