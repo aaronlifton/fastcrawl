@@ -3,11 +3,12 @@
 use crc32fast::Hasher as Crc32;
 use reqwest::header::{HeaderMap, HeaderName, CONTENT_LANGUAGE, CONTENT_TYPE};
 use scraper::{Html, Selector};
+use serde::de::{self, Deserializer};
 use serde::ser::{SerializeStruct, Serializer};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fmt;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
 
 /// Raw page bytes plus crawl metadata awaiting normalization.
@@ -105,6 +106,13 @@ impl PageMetadata {
             lossy_decoding,
         }
     }
+    /// Returns the fetch timestamp in epoch milliseconds.
+    pub fn fetched_epoch_ms(&self) -> u64 {
+        self.fetched_at
+            .duration_since(UNIX_EPOCH)
+            .map(|dur| dur.as_millis() as u64)
+            .unwrap_or(0)
+    }
 }
 
 impl Serialize for PageMetadata {
@@ -116,11 +124,7 @@ impl Serialize for PageMetadata {
         state.serialize_field("url", &self.url)?;
         state.serialize_field("depth", &self.depth)?;
         state.serialize_field("shard", &self.shard)?;
-        let fetched_ms = self
-            .fetched_at
-            .duration_since(UNIX_EPOCH)
-            .map(|dur| dur.as_millis() as u64)
-            .unwrap_or(0);
+        let fetched_ms = self.fetched_epoch_ms();
         state.serialize_field("fetched_at_epoch_ms", &fetched_ms)?;
         state.serialize_field("status", &self.status)?;
         state.serialize_field("content_type", &self.content_type)?;
@@ -129,6 +133,45 @@ impl Serialize for PageMetadata {
         state.serialize_field("checksum", &self.checksum)?;
         state.serialize_field("lossy_decoding", &self.lossy_decoding)?;
         state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for PageMetadata {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Helper {
+            url: Url,
+            depth: u8,
+            shard: Option<usize>,
+            fetched_at_epoch_ms: u64,
+            status: u16,
+            content_type: Option<String>,
+            content_language: Option<String>,
+            content_length: usize,
+            checksum: u32,
+            lossy_decoding: bool,
+        }
+
+        let helper = Helper::deserialize(deserializer)?;
+        let fetched_at = UNIX_EPOCH
+            .checked_add(Duration::from_millis(helper.fetched_at_epoch_ms))
+            .ok_or_else(|| de::Error::custom("timestamp overflow"))?;
+
+        Ok(Self {
+            url: helper.url,
+            depth: helper.depth,
+            shard: helper.shard,
+            fetched_at,
+            status: helper.status,
+            content_type: helper.content_type,
+            content_language: helper.content_language,
+            content_length: helper.content_length,
+            checksum: helper.checksum,
+            lossy_decoding: helper.lossy_decoding,
+        })
     }
 }
 
@@ -141,7 +184,7 @@ fn header_to_string(headers: &HeaderMap, name: HeaderName) -> Option<String> {
 }
 
 /// Heading hierarchy captured while walking the document.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SectionHeading {
     /// Heading depth (1-6).
     pub level: u8,
@@ -150,7 +193,7 @@ pub struct SectionHeading {
 }
 
 /// Classification for extracted blocks.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BlockKind {
     /// Heading text at a given level.
     Heading {
@@ -168,7 +211,7 @@ pub enum BlockKind {
 }
 
 /// Discrete chunk of cleaned text tagged with structural context.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextBlock {
     /// Block classification.
     pub kind: BlockKind,
@@ -185,7 +228,7 @@ pub struct TextBlock {
 }
 
 /// Chunk emitted for downstream embedding or indexing.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NormalizedChunk {
     /// Monotonic chunk identifier assigned during normalization.
     pub chunk_id: usize,
@@ -202,7 +245,7 @@ pub struct NormalizedChunk {
 }
 
 /// Fully normalized representation of a fetched page.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NormalizedPage {
     /// Captured metadata.
     pub metadata: PageMetadata,

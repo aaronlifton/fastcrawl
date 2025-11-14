@@ -4,14 +4,18 @@
 pub mod agents;
 mod bloom;
 pub mod controls;
+pub mod embeddings;
 pub mod frontier;
 pub mod html;
+pub mod manifest;
 pub mod normalizer;
 pub mod runtime;
 
 pub use agents::{registry, AgentRegistry, CrawlTask, InlineString};
 pub use controls::{Cli, CrawlControls};
+pub use embeddings::EmbeddedChunkRecord;
 pub use frontier::{Frontier, FrontierError, DEFAULT_FRONTIER_QUEUE, DEFAULT_FRONTIER_SEEN};
+pub use manifest::ManifestRecord;
 pub use normalizer::{
     BlockKind, FetchedPage, NormalizationConfig, NormalizationError, NormalizedChunk,
     NormalizedPage, Normalizer, PageMetadata, SectionHeading, TextBlock,

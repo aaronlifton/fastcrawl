@@ -8,6 +8,7 @@ use crate::controls::NormalizationSettings;
 use crate::controls::{PartitionSettings, PartitionStrategyArg};
 use crate::frontier::{Frontier, FrontierError, DEFAULT_FRONTIER_QUEUE, DEFAULT_FRONTIER_SEEN};
 use crate::html::{stream_links, HtmlStreamError, LinkHarvest};
+use crate::manifest::ManifestRecord;
 use crate::normalizer::{
     FetchedPage, NormalizationConfig, NormalizationError, NormalizedPage, Normalizer,
 };
@@ -17,9 +18,9 @@ use reqwest::{header::HeaderMap, Client};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
-use std::path::Path;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -1101,31 +1102,30 @@ async fn shard_inbox_loop<const QUEUE: usize, const SEEN: usize>(
 
 struct NormalizationHandle {
     config: NormalizationConfig,
-    sender: mpsc::Sender<NormalizedPage>,
+    sender: Option<mpsc::Sender<NormalizedPage>>,
+    writer: Option<std::thread::JoinHandle<()>>,
 }
 
 impl NormalizationHandle {
     fn new(settings: NormalizationSettings) -> io::Result<Self> {
         let page_sink = JsonlSink::new(settings.output_path)?;
         let manifest_sink = match settings.manifest_path {
-            Some(path) => Some(JsonlSink::new(path)?),
+            Some(path) => Some(ManifestWriter::new(path)?),
             None => None,
         };
         let (sender, receiver) = mpsc::channel(NORMALIZATION_CHANNEL_CAPACITY);
 
-        thread::Builder::new()
+        let writer = thread::Builder::new()
             .name("fastcrawl-normalize-writer".into())
             .spawn(move || {
-                let mut receiver = receiver;
-                let manifest_sink = manifest_sink;
-                let mut digests: HashMap<String, (u32, u64)> = HashMap::new();
+                let mut receiver: mpsc::Receiver<NormalizedPage> = receiver;
+                let mut manifest_sink = manifest_sink;
                 while let Some(page) = receiver.blocking_recv() {
                     if let Err(err) = page_sink.write_json(&page) {
                         eprintln!("normalization writer error: {err}");
                     }
-                    if let Some(sink) = manifest_sink.as_ref() {
-                        let record = DigestRecord::new(&page, &mut digests);
-                        if let Err(err) = sink.write_json(&record) {
+                    if let Some(sink) = manifest_sink.as_mut() {
+                        if let Err(err) = sink.write_page(&page) {
                             eprintln!("normalization manifest error: {err}");
                         }
                     }
@@ -1135,9 +1135,82 @@ impl NormalizationHandle {
 
         Ok(Self {
             config: settings.config,
-            sender,
+            sender: Some(sender),
+            writer: Some(writer),
         })
     }
+}
+
+impl NormalizationHandle {
+    fn sender(&self) -> mpsc::Sender<NormalizedPage> {
+        self.sender
+            .as_ref()
+            .expect("normalization sender missing")
+            .clone()
+    }
+}
+
+impl Drop for NormalizationHandle {
+    fn drop(&mut self) {
+        // Drop our sender handle so the writer thread can observe channel closure.
+        self.sender.take();
+        if let Some(writer) = self.writer.take() {
+            if let Err(err) = writer.join() {
+                eprintln!("normalization writer thread exited with error: {err:?}");
+            }
+        }
+    }
+}
+
+struct ManifestWriter {
+    sink: JsonlSink,
+    digests: HashMap<String, (u32, u64)>,
+}
+
+impl ManifestWriter {
+    fn new(path: PathBuf) -> io::Result<Self> {
+        let digests = load_manifest_digests(&path)?;
+        let sink = JsonlSink::new(path)?;
+        Ok(Self { sink, digests })
+    }
+
+    fn write_page(&mut self, page: &NormalizedPage) -> io::Result<()> {
+        let meta = &page.metadata;
+        let fetched = meta.fetched_epoch_ms();
+        let url = meta.url.to_string();
+        let previous = self.digests.insert(url.clone(), (meta.checksum, fetched));
+        let changed = previous
+            .map(|(checksum, _)| checksum != meta.checksum)
+            .unwrap_or(true);
+        let record = ManifestRecord::new(url, meta.checksum, fetched, changed);
+        self.sink.write_json(&record)
+    }
+}
+
+fn load_manifest_digests(path: &Path) -> io::Result<HashMap<String, (u32, u64)>> {
+    let mut digests = HashMap::new();
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(digests),
+        Err(err) => return Err(err),
+    };
+
+    let reader = BufReader::new(file);
+    for (line_no, line) in reader.lines().enumerate() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let record: ManifestRecord = serde_json::from_str(&line).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid manifest record at line {}: {}", line_no + 1, err),
+            )
+        })?;
+        digests.insert(record.url, (record.checksum, record.last_seen_epoch_ms));
+    }
+
+    Ok(digests)
 }
 
 #[derive(Clone)]
@@ -1152,7 +1225,7 @@ impl NormalizationRuntime {
         Self {
             shard,
             normalizer: Normalizer::new(handle.config),
-            sender: handle.sender.clone(),
+            sender: handle.sender(),
         }
     }
 
@@ -1230,36 +1303,6 @@ impl JsonlSink {
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
         guard.write_all(b"\n")?;
         Ok(())
-    }
-}
-
-#[derive(Serialize)]
-struct DigestRecord {
-    url: String,
-    checksum: u32,
-    last_seen_epoch_ms: u64,
-    changed: bool,
-}
-
-impl DigestRecord {
-    fn new(page: &NormalizedPage, digests: &mut HashMap<String, (u32, u64)>) -> Self {
-        let meta = &page.metadata;
-        let fetched_ms = meta
-            .fetched_at
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|dur| dur.as_millis() as u64)
-            .unwrap_or(0);
-        let url = meta.url.to_string();
-        let previous = digests.insert(url.clone(), (meta.checksum, fetched_ms));
-        let changed = previous
-            .map(|(checksum, _)| checksum != meta.checksum)
-            .unwrap_or(true);
-        Self {
-            url,
-            checksum: meta.checksum,
-            last_seen_epoch_ms: fetched_ms,
-            changed,
-        }
     }
 }
 

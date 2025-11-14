@@ -108,7 +108,13 @@ delimited JSON (metadata + cleaned text blocks + embedding-ready chunks) to `--n
 `normalized_pages.jsonl`) and respects additional knobs:
 
 ```
-cargo run --example wiki -- \
+cargo run --example wiki \
+  --features multi_thread -- \
+  --duration-secs 1 \
+  --partition wiki-prefix \
+  --partition-namespace \
+  --partition-buckets 26 \
+  --remote-batch-size 32 \
   --normalize \
   --normalize-jsonl data/wiki.jsonl \
   --normalize-manifest-jsonl data/wiki_manifest.jsonl \
@@ -119,8 +125,76 @@ cargo run --example wiki -- \
 Chunk and block bounds can be tuned via `--normalize-chunk-tokens`, `--normalize-overlap-tokens`, and
 `--normalize-max-blocks`. The JSON payload includes per-block heading context, content hashes, token estimates, and
 metadata such as HTTP status, language hints, and shard ownership so downstream embedding/indexing jobs can ingest it
-directly. When `--normalize-manifest-jsonl` is set, the runtime also appends digest records (`url`, `checksum`,
-`last_seen_epoch_ms`, `changed`) so incremental pipelines can diff and skip re-embedding unchanged pages.
+directly. When `--normalize-manifest-jsonl` is set, the runtime loads any existing manifest at that path before
+overwriting it, then appends digest records (`url`, `checksum`, `last_seen_epoch_ms`, `changed`). Keeping that JSONL
+file between runs unlocks true incremental diffs instead of just reporting changes that happened within a single
+process.
+
+## Embedding Pipeline
+
+`fastcrawl-embedder` replaces the toy bag-of-words demo with true OpenAI embeddings. Point it at the normalized JSONL
+stream and it batches chunk text into the `text-embedding-3-small` (default) model:
+
+First run:
+
+-
+
+```sh
+cargo run --example wiki -- \
+  --normalize \
+  --normalize-jsonl data/wiki.jsonl \
+  --normalize-manifest-jsonl data/wiki_manifest.jsonl \
+  --duration-secs 4
+```
+
+Once that finishes, run the embedder command:
+
+```sh
+OPENAI_API_KEY=sk-yourkey \
+cargo run --bin embedder -- \
+  --input data/wiki.jsonl \
+  --manifest data/wiki_manifest.jsonl \
+  --output data/wiki_embeddings.jsonl \
+  --batch-size 64 \
+  --only-changed
+```
+
+Important flags/env vars:
+
+- `OPENAI_API_KEY` must be set (or `--openai-api-key` passed).
+- `--openai-model` chooses any embedding-capable model (e.g. `text-embedding-3-large`).
+- `--openai-dimensions` optionally asks OpenAI to project to a smaller dimension.
+- `--openai-batch` controls request fan-out (default 32, retries/backoff handled automatically).
+- `--openai-threads` (alias `--worker-threads`, or `FASTCRAWL_OPENAI_THREADS`) fans batches out to multiple worker
+  threads so you can overlap network latency when OpenAI throttles.
+
+The embedder still emits newline-delimited `EmbeddedChunkRecord`s compatible with downstream tooling. Set
+`--only-changed` alongside the manifest produced by normalization to skip chunks whose manifest `changed` flag stayed
+false, so re-embedding only happens when the crawler observed fresh content.
+
+## pgvector Store
+
+Ship the embeddings into Postgres with the bundled `fastcrawl-pgvector` binary. It ingests the JSONL produced above and
+upserts into a `vector` table (creating the `vector` extension/table automatically unless disabled):
+
+```sh
+export DATABASE_URL=postgres://postgres:postgres@localhost:5432/fastcrawl
+cargo run --bin pgvector_store -- \
+  --input data/wiki_embeddings.jsonl \
+  --schema public \
+  --table wiki_chunks \
+  --batch-size 256 \
+  --upsert
+```
+
+Columns created by default:
+
+- `url TEXT`, `chunk_id BIGINT` primary key for provenance.
+- `text`, `section_path JSONB`, `token_estimate`, `checksum`, `last_seen_epoch_ms` for metadata.
+- `embedding VECTOR(<dims>)` where `<dims>` matches the first record’s vector length.
+
+With vectors in pgvector you can run similarity search straight from SQL, plug it into RAG services, or join additional
+metadata tables to restrict retrieval.
 
 ## LLM-Oriented Next Steps
 
