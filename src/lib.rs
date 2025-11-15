@@ -4,6 +4,7 @@
 pub mod agents;
 mod bloom;
 pub mod controls;
+pub mod embedder;
 pub mod embeddings;
 pub mod frontier;
 pub mod html;

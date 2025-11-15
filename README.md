@@ -175,17 +175,36 @@ false, so re-embedding only happens when the crawler observed fresh content.
 ## pgvector Store
 
 Ship the embeddings into Postgres with the bundled `fastcrawl-pgvector` binary. It ingests the JSONL produced above and
-upserts into a `vector` table (creating the `vector` extension/table automatically unless disabled):
+upserts into a `vector` table (creating the `vector` extension/table automatically unless disabled). The repo now ships
+a `docker-compose.yml` that launches a local Postgres instance with the `pgvector` extension preinstalled:
+
+```sh
+docker compose up -d pgvector
+```
+
+Once the container is healthy, point `DATABASE_URL` at it and run the loader:
+
+```fish
+set -gx DATABASE_URL postgres://postgres:postgres@localhost:5432/fastcrawl
+```
 
 ```sh
 export DATABASE_URL=postgres://postgres:postgres@localhost:5432/fastcrawl
+```
+
+```sh
+docker-compose up;
+
 cargo run --bin pgvector_store -- \
   --input data/wiki_embeddings.jsonl \
   --schema public \
   --table wiki_chunks \
   --batch-size 256 \
-  --upsert
+  --upsert \
+  --database-url=postgresql://postgres:postgres@localhost:5432
 ```
+
+Stop the container with `docker compose down` (pass `-v` to remove the persisted volume if you want a clean slate).
 
 Columns created by default:
 

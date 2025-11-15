@@ -69,6 +69,7 @@ async fn main() -> Result<()> {
 
     let mut batch = Vec::with_capacity(batch_size);
     let Some(first_record) = next_record(&mut lines)? else {
+        println!("No embeddings to insert; nothing to do.");
         return Ok(());
     };
     anyhow::ensure!(
@@ -84,17 +85,27 @@ async fn main() -> Result<()> {
     }
 
     batch.push(first_record);
+    let mut total_inserted = 0usize;
     while let Some(record) = next_record(&mut lines)? {
         batch.push(record);
         if batch.len() >= batch_size {
             insert_batch(&mut client, &table, &batch, cli.upsert).await?;
+            total_inserted += batch.len();
             batch.clear();
         }
     }
 
     if !batch.is_empty() {
         insert_batch(&mut client, &table, &batch, cli.upsert).await?;
+        total_inserted += batch.len();
     }
+
+    println!(
+        "Successfully inserted {} record{} into {}.",
+        total_inserted,
+        if total_inserted == 1 { "" } else { "s" },
+        table.qualified()
+    );
 
     Ok(())
 }

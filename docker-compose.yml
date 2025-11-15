@@ -1,0 +1,24 @@
+version: "3.9"
+
+services:
+  pgvector:
+    image: pgvector/pgvector:0.8.1-pg18-trixie
+    container_name: fastcrawl-pgvector
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fastcrawl
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgvector-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgvector-data:
+    driver: local
