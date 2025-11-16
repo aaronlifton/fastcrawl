@@ -1,10 +1,10 @@
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
-use fastcrawl::EmbeddedChunkRecord;
+use fastcrawl::{EmbeddedChunkRecord, TableName};
 use pgvector::Vector;
 use tokio_postgres::types::Json;
 use tokio_postgres::{Client, NoTls};
@@ -42,6 +42,10 @@ struct PgVectorCli {
     /// Create the vector extension/table automatically if missing
     #[arg(long, env = "FASTCRAWL_PGVECTOR_PREPARE", default_value_t = true)]
     prepare_table: bool,
+
+    /// Ensure full-text search column/index exist for lexical queries
+    #[arg(long, env = "FASTCRAWL_PGVECTOR_PREPARE_FTS", default_value_t = true)]
+    prepare_fts: bool,
 
     /// Upsert rows when (url, chunk_id) already exists
     #[arg(long, env = "FASTCRAWL_PGVECTOR_UPSERT", default_value_t = true)]
@@ -83,6 +87,10 @@ async fn main() -> Result<()> {
         ensure_vector_extension(&mut client).await?;
         ensure_table(&mut client, &table, dims).await?;
     }
+    if cli.prepare_fts {
+        ensure_fts_column(&mut client, &table).await?;
+        ensure_fts_index(&mut client, &table).await?;
+    }
 
     batch.push(first_record);
     let mut total_inserted = 0usize;
@@ -91,6 +99,7 @@ async fn main() -> Result<()> {
         if batch.len() >= batch_size {
             insert_batch(&mut client, &table, &batch, cli.upsert).await?;
             total_inserted += batch.len();
+            render_progress(total_inserted)?;
             batch.clear();
         }
     }
@@ -98,8 +107,12 @@ async fn main() -> Result<()> {
     if !batch.is_empty() {
         insert_batch(&mut client, &table, &batch, cli.upsert).await?;
         total_inserted += batch.len();
+        render_progress(total_inserted)?;
     }
 
+    if total_inserted > 0 {
+        println!();
+    }
     println!(
         "Successfully inserted {} record{} into {}.",
         total_inserted,
@@ -130,6 +143,7 @@ async fn ensure_table(client: &mut Client, table: &TableName, dims: usize) -> Re
             embedding VECTOR({dims}) NOT NULL,
             checksum BIGINT NOT NULL,
             last_seen_epoch_ms BIGINT NOT NULL,
+            text_tsv TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', text)) STORED,
             PRIMARY KEY (url, chunk_id)
         )",
         table.qualified()
@@ -138,6 +152,32 @@ async fn ensure_table(client: &mut Client, table: &TableName, dims: usize) -> Re
         .execute(&ddl, &[])
         .await
         .context("failed to create pgvector table")?;
+    Ok(())
+}
+
+async fn ensure_fts_column(client: &mut Client, table: &TableName) -> Result<()> {
+    let alter = format!(
+        "ALTER TABLE {} ADD COLUMN IF NOT EXISTS text_tsv TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', text)) STORED",
+        table.qualified()
+    );
+    client
+        .execute(&alter, &[])
+        .await
+        .context("failed to ensure text_tsv column")?;
+    Ok(())
+}
+
+async fn ensure_fts_index(client: &mut Client, table: &TableName) -> Result<()> {
+    let index_name = table.fts_index_name();
+    let sql = format!(
+        "CREATE INDEX IF NOT EXISTS {} ON {} USING GIN (text_tsv)",
+        index_name,
+        table.qualified()
+    );
+    client
+        .execute(&sql, &[])
+        .await
+        .context("failed to ensure text_tsv GIN index")?;
     Ok(())
 }
 
@@ -209,6 +249,13 @@ fn insert_sql(table: &TableName, upsert: bool) -> String {
     sql
 }
 
+fn render_progress(inserted: usize) -> Result<()> {
+    let plural = if inserted == 1 { "" } else { "s" };
+    print!("\rInserted {} record{}...", inserted, plural);
+    io::stdout().flush()?;
+    Ok(())
+}
+
 fn next_record<I>(lines: &mut I) -> Result<Option<EmbeddedChunkRecord>>
 where
     I: Iterator<Item = (usize, std::io::Result<String>)>,
@@ -231,26 +278,4 @@ where
     T: Copy + std::fmt::Display,
 {
     i64::try_from(value).map_err(|_| anyhow!("{} value {} exceeds i64 range", field, value))
-}
-
-struct TableName {
-    schema: String,
-    table: String,
-}
-
-impl TableName {
-    fn new(schema: String, table: String) -> Result<Self> {
-        anyhow::ensure!(!schema.trim().is_empty(), "schema name is required");
-        anyhow::ensure!(!table.trim().is_empty(), "table name is required");
-        Ok(Self { schema, table })
-    }
-
-    fn qualified(&self) -> String {
-        format!("{}.{}", quote_ident(&self.schema), quote_ident(&self.table))
-    }
-}
-
-fn quote_ident(input: &str) -> String {
-    let escaped = input.replace('"', "\"\"");
-    format!("\"{}\"", escaped)
 }

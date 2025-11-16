@@ -11,6 +11,7 @@ pub mod html;
 pub mod manifest;
 pub mod normalizer;
 pub mod runtime;
+pub mod vector_store;
 
 pub use agents::{registry, AgentRegistry, CrawlTask, InlineString};
 pub use controls::{Cli, CrawlControls};
@@ -22,3 +23,4 @@ pub use normalizer::{
     NormalizedPage, Normalizer, PageMetadata, SectionHeading, TextBlock,
 };
 pub use runtime::run as run_crawler;
+pub use vector_store::TableName;

@@ -12,13 +12,11 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pgvector-data:/var/lib/postgresql
+      - ./data/pgvector:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres"]
       interval: 5s
       timeout: 3s
       retries: 5
 
-volumes:
-  pgvector-data:
-    driver: local
+volumes: {}

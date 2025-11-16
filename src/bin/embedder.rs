@@ -9,6 +9,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use fastcrawl::embedder::openai::OpenAiEmbedder;
+use fastcrawl::embedder::qdrant::QdrantEmbedder;
 use fastcrawl::{EmbeddedChunkRecord, ManifestRecord, NormalizedPage};
 
 #[derive(Parser, Debug)]
@@ -41,9 +42,13 @@ struct EmbedCli {
     #[arg(long, default_value_t = false)]
     only_changed: bool,
 
+    /// Embedding provider to use (openai or qdrant)
+    #[arg(long, env = "FASTCRAWL_EMBED_PROVIDER", default_value = "openai")]
+    provider: String,
+
     /// OpenAI API key used for embedding calls
     #[arg(long, env = "OPENAI_API_KEY")]
-    openai_api_key: String,
+    openai_api_key: Option<String>,
 
     /// Embedding model identifier (e.g. text-embedding-3-small)
     #[arg(
@@ -66,7 +71,7 @@ struct EmbedCli {
     openai_base_url: String,
 
     /// Max number of chunks to send per embedding request
-    #[arg(long, env = "FASTCRAWL_OPENAI_BATCH", default_value_t = 32)]
+    #[arg(long, env = "FASTCRAWL_EMBED_BATCH", default_value_t = 32)]
     batch_size: usize,
 
     /// Max seconds to wait for each embedding request
@@ -76,6 +81,18 @@ struct EmbedCli {
     /// Number of retries for rate limits or transient errors
     #[arg(long, env = "FASTCRAWL_OPENAI_MAX_RETRIES", default_value_t = 5)]
     max_retries: usize,
+
+    /// Qdrant API key (falls back to QDRANT_API_KEY env var)
+    #[arg(long, env = "QDRANT_API_KEY")]
+    qdrant_api_key: Option<String>,
+
+    /// Qdrant inference endpoint (e.g. https://cluster-id.cloud.qdrant.io/inference/text)
+    #[arg(long, env = "FASTCRAWL_QDRANT_ENDPOINT")]
+    qdrant_endpoint: Option<String>,
+
+    /// Qdrant model identifier advertised by the inference cluster
+    #[arg(long, env = "FASTCRAWL_QDRANT_MODEL")]
+    qdrant_model: Option<String>,
 
     /// Number of concurrent embedding workers
     #[arg(
@@ -96,15 +113,47 @@ fn main() -> Result<()> {
     };
 
     let batch_size = cli.batch_size.max(1);
-    let embedder = OpenAiEmbedder::new(
-        cli.openai_api_key,
-        cli.openai_base_url,
-        cli.openai_model,
-        cli.openai_dimensions,
-        Duration::from_secs(cli.openai_timeout_secs.max(1)),
-        cli.max_retries.max(1),
-        batch_size,
-    )?;
+    let timeout = Duration::from_secs(cli.openai_timeout_secs.max(1));
+    let max_retries = cli.max_retries.max(1);
+    let provider = cli.provider.to_lowercase();
+    let embedder = match provider.as_str() {
+        "openai" => {
+            let api_key = cli.openai_api_key.clone().ok_or_else(|| {
+                anyhow!("--openai-api-key is required when using the OpenAI provider")
+            })?;
+            EmbeddingClient::OpenAi(OpenAiEmbedder::new(
+                api_key,
+                cli.openai_base_url.clone(),
+                cli.openai_model.clone(),
+                cli.openai_dimensions,
+                timeout,
+                max_retries,
+                batch_size,
+            )?)
+        }
+        "qdrant" => {
+            let api_key = cli.qdrant_api_key.clone().ok_or_else(|| {
+                anyhow!("--qdrant-api-key (or QDRANT_API_KEY) is required for the Qdrant provider")
+            })?;
+            let endpoint = cli
+                .qdrant_endpoint
+                .clone()
+                .ok_or_else(|| anyhow!("--qdrant-endpoint is required for the Qdrant provider"))?;
+            let model = cli
+                .qdrant_model
+                .clone()
+                .ok_or_else(|| anyhow!("--qdrant-model is required for the Qdrant provider"))?;
+            EmbeddingClient::Qdrant(QdrantEmbedder::new(
+                api_key,
+                endpoint,
+                model,
+                timeout,
+                max_retries,
+                batch_size,
+            )?)
+        }
+        other => anyhow::bail!("unsupported embedding provider '{}'", other),
+    };
     let input =
         File::open(&cli.input).with_context(|| format!("failed to open {:?}", cli.input))?;
     let reader = BufReader::new(input);
@@ -128,7 +177,7 @@ fn main() -> Result<()> {
 fn process_stream<R: BufRead, W: Write>(
     reader: R,
     writer: &mut W,
-    embedder: &OpenAiEmbedder,
+    embedder: &EmbeddingClient,
     batch_size: usize,
     manifest: Option<&HashMap<String, bool>>,
     only_changed: bool,
@@ -384,7 +433,7 @@ fn worker_loop(
     worker_id: usize,
     receiver: Receiver<EmbeddingTask>,
     sender: Sender<EmbeddingResult>,
-    embedder: OpenAiEmbedder,
+    embedder: EmbeddingClient,
 ) {
     for task in receiver.iter() {
         let EmbeddingTask {
@@ -422,7 +471,7 @@ fn worker_loop(
     }
 }
 
-fn embed_records(embedder: &OpenAiEmbedder, records: &mut Vec<EmbeddedChunkRecord>) -> Result<()> {
+fn embed_records(embedder: &EmbeddingClient, records: &mut Vec<EmbeddedChunkRecord>) -> Result<()> {
     if records.is_empty() {
         return Ok(());
     }
@@ -452,3 +501,18 @@ struct EmbeddingBatchResult {
 }
 
 type EmbeddingResult = Result<EmbeddingBatchResult>;
+
+#[derive(Clone)]
+enum EmbeddingClient {
+    OpenAi(OpenAiEmbedder),
+    Qdrant(QdrantEmbedder),
+}
+
+impl EmbeddingClient {
+    fn embed_batch(&self, inputs: &[&str]) -> Result<Vec<Vec<f32>>> {
+        match self {
+            EmbeddingClient::OpenAi(client) => client.embed_batch(inputs),
+            EmbeddingClient::Qdrant(client) => client.embed_batch(inputs),
+        }
+    }
+}

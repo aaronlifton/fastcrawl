@@ -110,7 +110,7 @@ delimited JSON (metadata + cleaned text blocks + embedding-ready chunks) to `--n
 ```
 cargo run --example wiki \
   --features multi_thread -- \
-  --duration-secs 1 \
+  --duration-secs 30 \
   --partition wiki-prefix \
   --partition-namespace \
   --partition-buckets 26 \
@@ -132,8 +132,8 @@ process.
 
 ## Embedding Pipeline
 
-`fastcrawl-embedder` replaces the toy bag-of-words demo with true OpenAI embeddings. Point it at the normalized JSONL
-stream and it batches chunk text into the `text-embedding-3-small` (default) model:
+`fastcrawl-embedder` replaces the toy bag-of-words demo with real embedding providers. Point it at the normalized JSONL
+stream and it batches chunk text into the configured backend (OpenAI by default):
 
 First run:
 
@@ -159,12 +159,27 @@ cargo run --bin embedder -- \
   --only-changed
 ```
 
+To use Qdrant Cloud Inference instead of OpenAI:
+
+```sh
+QDRANT_API_KEY=secret \
+cargo run --bin embedder -- \
+  --provider qdrant \
+  --qdrant-endpoint https://YOUR-CLUSTER.cloud.qdrant.io/inference/text \
+  --qdrant-model qdrant/all-MiniLM-L6-v2 \
+  --input data/wiki.jsonl \
+  --manifest data/wiki_manifest.jsonl \
+  --output data/wiki_embeddings.jsonl
+```
+
 Important flags/env vars:
 
-- `OPENAI_API_KEY` must be set (or `--openai-api-key` passed).
+- `--provider` selects `openai` (default) or `qdrant`.
+- `OPENAI_API_KEY` must be set (or `--openai-api-key` passed) when `--provider openai`.
 - `--openai-model` chooses any embedding-capable model (e.g. `text-embedding-3-large`).
 - `--openai-dimensions` optionally asks OpenAI to project to a smaller dimension.
-- `--openai-batch` controls request fan-out (default 32, retries/backoff handled automatically).
+- `QDRANT_API_KEY`, `--qdrant-endpoint`, and `--qdrant-model` configure the Qdrant backend.
+- `--batch-size` (env `FASTCRAWL_EMBED_BATCH`) controls request fan-out (default 32, retries/backoff handled automatically).
 - `--openai-threads` (alias `--worker-threads`, or `FASTCRAWL_OPENAI_THREADS`) fans batches out to multiple worker
   threads so you can overlap network latency when OpenAI throttles.
 
@@ -206,14 +221,96 @@ cargo run --bin pgvector_store -- \
 
 Stop the container with `docker compose down` (pass `-v` to remove the persisted volume if you want a clean slate).
 
+`fastcrawl-pgvector` now provisions a generated `text_tsv` column plus a GIN index so Postgres full-text queries stay
+fast. If you already had a table before this change, run the helper to retrofit the column/index (and optionally
+ANALYZE) without reloading vectors:
+
+```sh
+cargo run --bin fts_indexer -- \
+  --database-url $DATABASE_URL \
+  --schema public \
+  --table wiki_chunks
+```
+
 Columns created by default:
 
 - `url TEXT`, `chunk_id BIGINT` primary key for provenance.
 - `text`, `section_path JSONB`, `token_estimate`, `checksum`, `last_seen_epoch_ms` for metadata.
 - `embedding VECTOR(<dims>)` where `<dims>` matches the first record’s vector length.
+- `text_tsv TSVECTOR` generated from the chunk text, indexed for lexical search.
 
 With vectors in pgvector you can run similarity search straight from SQL, plug it into RAG services, or join additional
 metadata tables to restrict retrieval.
+
+## Retrieval Evaluation Harness
+
+Quantify how well pgvector surfaces the right chunks before plugging them into an LLM:
+
+```
+cargo run --bin vector_eval -- \
+  --cases data/wiki_eval.jsonl \
+  --database-url postgres://postgres:postgres@localhost:5432/fastcrawl \
+  --schema public \
+  --table wiki_chunks \
+  --top-k 5 \
+  --dense-candidates 32 \
+  --lexical-candidates 64 \
+  --rrf-k 60 \
+  --report-json data/wiki_eval_report.json \
+  --openai-api-key $OPENAI_API_KEY
+```
+
+The CLI embeds each query in `data/wiki_eval.jsonl`, performs the same dense+lexical fusion used by the HTTP retriever,
+and prints hit-rate / MRR / recall metrics. Tweak fusion behaviour with the candidate and `--rrf-k` knobs. The optional
+`--report-json` writes a structured summary for dashboards (including fused/dense/lexical scores per chunk).
+
+## Embedding Freshness Planner
+
+Detect drift between two manifest snapshots and emit a plan describing which URLs need re-embedding:
+
+```
+cargo run --bin freshness -- \
+  --current-manifest data/wiki_manifest.jsonl \
+  --previous-manifest data/wiki_manifest_prev.jsonl \
+  --plan-output data/refresh_plan.jsonl \
+  --ledger-output data/embedding_ledger.jsonl \
+  --exec-plan 'cargo run --bin embedder -- --input data/wiki.jsonl --manifest data/wiki_manifest.jsonl --output data/wiki_embeddings.jsonl --only-changed --openai-api-key $OPENAI_API_KEY'
+```
+
+`fastcrawl-freshness` diffs the manifests, prints counts for new/changed/deleted URLs, writes JSONL plan entries,
+appends an audit ledger, and (optionally) runs a shell hook once the plan exists. Pass `--dry-run` to see stats without
+touching files or invoking the hook.
+
+## Retrieval API
+
+Expose pgvector retrieval over HTTP for downstream services:
+
+```
+cargo run --bin retriever_api -- \
+  --database-url postgres://postgres:postgres@localhost:5432/fastcrawl \
+  --schema public \
+  --table wiki_chunks \
+  --bind 0.0.0.0:8080 \
+  --openai-api-key $OPENAI_API_KEY \
+  --dense-candidates 32 \
+  --lexical-candidates 64
+```
+
+Endpoints:
+
+- `GET /healthz` – liveness probe.
+- `POST /v1/query` – `{ "query": "When did Apollo 11 land?", "top_k": 6 }` returns scored chunks filtered by the token
+  budget. Override the budget per request via `max_tokens`.
+
+The retriever now performs hybrid search: dense candidates from pgvector plus lexical matches taken from Postgres full-
+text search, fused via Reciprocal Rank Fusion, then trimmed by an optional token budget. Each chunk reports
+`dense_distance`, optional `lexical_score`, and the final `fused_score`/rank so clients can understand why it surfaced.
+Tune the hybrid behaviour with `--dense-candidates`, `--lexical-candidates`, and `--rrf-k`. By default the server also
+caches 1,024 query embeddings and enforces 120 requests/minute with a burst of 12; adjust via `--embedding-cache-size`,
+`--max-requests-per-minute`, and `--rate-limit-burst`.
+
+Pair this API with the prompt templates in `personal_docs/prompt_templates/wiki_rag.md` to keep LLM formatting
+consistent.
 
 ## LLM-Oriented Next Steps
 
