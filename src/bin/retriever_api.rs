@@ -6,10 +6,10 @@ use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use clap::Parser;
+use clap::{ArgAction, Parser};
 use fastcrawl::embedder::openai::OpenAiEmbedder;
 use fastcrawl::normalizer::SectionHeading;
 use fastcrawl::TableName;
@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio_postgres::types::Json as PgJson;
 use tokio_postgres::{Client, NoTls, Row};
+use tracing::{error, info, warn};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -95,7 +96,7 @@ struct ApiCli {
     embedding_cache_size: usize,
 
     /// Max requests per minute allowed (0 disables rate limiting).
-    #[arg(long, default_value_t = 120)]
+    #[arg(long, default_value_t = 60)]
     max_requests_per_minute: u32,
 
     /// Rate-limit burst size (tokens available instantly).
@@ -113,6 +114,10 @@ struct ApiCli {
     /// Reciprocal Rank Fusion constant (higher softens score differences).
     #[arg(long, default_value_t = 60.0)]
     rrf_k: f64,
+
+    /// Allowed API keys (send via X-API-Key); omit to keep the API open.
+    #[arg(long = "api-key", env = "FASTCRAWL_API_KEY", action = ArgAction::Append)]
+    api_keys: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -129,6 +134,7 @@ struct AppState {
     dense_candidates: usize,
     lexical_candidates: usize,
     rrf_k: f64,
+    allowed_api_keys: Option<HashSet<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -208,6 +214,11 @@ struct ErrorBody {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
     let cli = ApiCli::parse();
     let table = TableName::new(cli.schema, cli.table)?;
     let embedder = Arc::new(OpenAiEmbedder::new(
@@ -225,7 +236,7 @@ async fn main() -> Result<()> {
         .with_context(|| format!("failed to connect to Postgres at {}", cli.database_url))?;
     tokio::spawn(async move {
         if let Err(err) = connection.await {
-            eprintln!("postgres connection error: {err}");
+            error!("postgres connection error: {err}");
         }
     });
     let query_sql = Arc::new(select_sql(&table));
@@ -245,6 +256,7 @@ async fn main() -> Result<()> {
         dense_candidates: cli.dense_candidates.max(1),
         lexical_candidates: cli.lexical_candidates,
         rrf_k: cli.rrf_k.max(1.0),
+        allowed_api_keys: build_api_key_set(&cli.api_keys),
     };
     let app = Router::new()
         .route("/healthz", get(healthz))
@@ -271,13 +283,16 @@ async fn healthz() -> StatusCode {
 
 async fn query_handler(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<QueryRequest>,
 ) -> Result<Json<QueryResponse>, (StatusCode, Json<ErrorBody>)> {
+    authorize_request(&state, &headers)?;
     if request.query.trim().is_empty() {
         return Err(bad_request("query text must not be empty"));
     }
     if let Some(limiter) = &state.rate_limiter {
         if !limiter.acquire().await {
+            warn!("rate limit exceeded");
             return Err(too_many_requests("rate limit exceeded"));
         }
     }
@@ -315,6 +330,8 @@ async fn query_handler(
         .map(|(idx, candidate)| candidate.into_chunk(idx + 1))
         .collect();
     let chunks = apply_token_budget(response_chunks, token_budget);
+    let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let chunk_count = chunks.len();
     let fusion_label = if state.lexical_candidates > 0 {
         Some("dense+lexical_rrf".to_string())
     } else {
@@ -324,11 +341,23 @@ async fn query_handler(
         chunks,
         meta: ResponseMeta {
             top_k,
-            latency_ms: start.elapsed().as_secs_f64() * 1000.0,
+            latency_ms,
             token_budget,
             fusion: fusion_label,
         },
     };
+    info!(
+        top_k,
+        chunk_count,
+        latency_ms,
+        fusion = %response
+            .meta
+            .fusion
+            .clone()
+            .unwrap_or_else(|| "dense_only".to_string()),
+        query = %request.query,
+        "served retrieval query"
+    );
     Ok(Json(response))
 }
 
@@ -342,6 +371,7 @@ fn bad_request(message: impl Into<String>) -> (StatusCode, Json<ErrorBody>) {
 }
 
 fn internal_error(err: anyhow::Error) -> (StatusCode, Json<ErrorBody>) {
+    error!(error = %err, "internal error");
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(ErrorBody {
@@ -357,6 +387,39 @@ fn too_many_requests(message: impl Into<String>) -> (StatusCode, Json<ErrorBody>
             message: message.into(),
         }),
     )
+}
+
+fn unauthorized(message: impl Into<String>) -> (StatusCode, Json<ErrorBody>) {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(ErrorBody {
+            message: message.into(),
+        }),
+    )
+}
+
+fn authorize_request(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(), (StatusCode, Json<ErrorBody>)> {
+    if let Some(keys) = &state.allowed_api_keys {
+        let provided = headers
+            .get("x-api-key")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        match provided {
+            Some(key) if keys.contains(&key) => {}
+            Some(_) => {
+                warn!("invalid API key");
+                return Err(unauthorized("invalid API key"));
+            }
+            None => {
+                warn!("missing API key");
+                return Err(unauthorized("missing API key"));
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn embed_query(state: &AppState, query: String) -> Result<Vec<f32>, anyhow::Error> {
@@ -657,6 +720,19 @@ fn select_lexical_sql(table: &TableName) -> String {
 
 fn build_cache(size: usize) -> Option<Arc<Mutex<LruCache<String, Vec<f32>>>>> {
     NonZeroUsize::new(size).map(|capacity| Arc::new(Mutex::new(LruCache::new(capacity))))
+}
+
+fn build_api_key_set(keys: &[String]) -> Option<HashSet<String>> {
+    let cleaned: HashSet<String> = keys
+        .iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
 }
 
 #[derive(Clone)]

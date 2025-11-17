@@ -179,13 +179,28 @@ Important flags/env vars:
 - `--openai-model` chooses any embedding-capable model (e.g. `text-embedding-3-large`).
 - `--openai-dimensions` optionally asks OpenAI to project to a smaller dimension.
 - `QDRANT_API_KEY`, `--qdrant-endpoint`, and `--qdrant-model` configure the Qdrant backend.
-- `--batch-size` (env `FASTCRAWL_EMBED_BATCH`) controls request fan-out (default 32, retries/backoff handled automatically).
+- `--batch-size` (env `FASTCRAWL_EMBED_BATCH`) controls request fan-out (default 32, retries/backoff handled
+  automatically).
 - `--openai-threads` (alias `--worker-threads`, or `FASTCRAWL_OPENAI_THREADS`) fans batches out to multiple worker
   threads so you can overlap network latency when OpenAI throttles.
 
 The embedder still emits newline-delimited `EmbeddedChunkRecord`s compatible with downstream tooling. Set
 `--only-changed` alongside the manifest produced by normalization to skip chunks whose manifest `changed` flag stayed
 false, so re-embedding only happens when the crawler observed fresh content.
+
+### Automated refresh pipeline
+
+Once you have normalized pages + a manifest, you can re-run freshness → embedding → pgvector load → FTS indexing in one
+shot via:
+
+```
+export OPENAI_API_KEY=sk-yourkey
+export DATABASE_URL=postgres://postgres:postgres@localhost:5432/fastcrawl
+./bin/refresh.sh
+```
+
+Override defaults with `FASTCRAWL_REFRESH_*` env vars (see the script). The script assumes the wiki crawl + normalization
+have already produced `data/wiki.jsonl` and `data/wiki_manifest.jsonl`.
 
 ## pgvector Store
 
@@ -302,15 +317,66 @@ Endpoints:
 - `POST /v1/query` – `{ "query": "When did Apollo 11 land?", "top_k": 6 }` returns scored chunks filtered by the token
   budget. Override the budget per request via `max_tokens`.
 
+Set one or more `--api-key` values (or `FASTCRAWL_API_KEY`) to require `X-API-Key` headers on every request. Combine that
+with the built-in rate limiter (`--max-requests-per-minute` / `--rate-limit-burst`) before exposing the service
+publicly.
+
 The retriever now performs hybrid search: dense candidates from pgvector plus lexical matches taken from Postgres full-
 text search, fused via Reciprocal Rank Fusion, then trimmed by an optional token budget. Each chunk reports
 `dense_distance`, optional `lexical_score`, and the final `fused_score`/rank so clients can understand why it surfaced.
 Tune the hybrid behaviour with `--dense-candidates`, `--lexical-candidates`, and `--rrf-k`. By default the server also
-caches 1,024 query embeddings and enforces 120 requests/minute with a burst of 12; adjust via `--embedding-cache-size`,
+caches 1,024 query embeddings and enforces 60 requests/minute with a burst of 12; adjust via `--embedding-cache-size`,
 `--max-requests-per-minute`, and `--rate-limit-burst`.
 
 Pair this API with the prompt templates in `personal_docs/prompt_templates/wiki_rag.md` to keep LLM formatting
 consistent.
+
+## Ad-hoc QA CLI
+
+To ask questions against the local retriever + OpenAI:
+
+```sh
+FASTCRAWL_RETRIEVER_URL=http://127.0.0.1:8080/v1/query \
+OPENAI_API_KEY=sk-yourkey \
+cargo run --bin rag_cli -- \
+  --query "What annual music festival takes place in Cambridge's Cherry Hinton Hall?" \
+  --top-k 5
+```
+
+**Answer**
+
+```
+--- Answer ---
+The annual music festival that takes place in Cambridge's Cherry Hinton Hall is the Cambridge Folk Festival, which has been organized by the city council since its inc
+eption in 1964[^chunk_id:21].
+
+- The Cambridge Summer Music Festival is another annual event, focusing on classical music held in the university's colleges and chapels[^chunk_id:21].
+- The Cambridge Shakespeare Festival features open-air performances of Shakespeare's works in the gardens of various colleges[^chunk_id:21].
+- The Cambridge Science Festival is the UK's largest free science festival, typically held annually in March[^chunk_id:21].
+
+Confidence level: High.
+```
+
+`fastcrawl-rag` streams the raw chunks (with fused/lexical scores) then prompts the OpenAI chat model (default
+`gpt-4o-mini`) to synthesize an answer with citations. Pass `--dry-run` to inspect context only, `--max-words` to
+enforce brevity, or tweak `--max-tokens` to bound the retriever token budget. The CLI expects `fastcrawl-retriever` to
+be running against the indexed Postgres instance so the hybrid path matches production behavior.
+
+Switch to Claude by adding `--llm-provider anthropic --anthropic-api-key ... --anthropic-model claude-3-sonnet-20240229`,
+or adjust `--max-completion-tokens` / `--temperature` to steer the answer style.
+
+### Dockerized retriever
+
+To run the HTTP retriever in Docker (next to Postgres):
+
+```sh
+export OPENAI_API_KEY=sk-yourkey
+docker compose up -d retriever
+```
+
+This builds `Dockerfile.retriever`, runs `fastcrawl-retriever` on port 8080, and points it at the `pgvector` service via
+`DATABASE_URL=postgres://postgres:postgres@pgvector:5432/fastcrawl`. Ensure `public.wiki_chunks` is populated (via
+`fastcrawl-pgvector`) before starting the retriever so queries return results immediately.
 
 ## LLM-Oriented Next Steps
 

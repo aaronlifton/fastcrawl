@@ -6,7 +6,7 @@ services:
     container_name: fastcrawl-pgvector
     restart: unless-stopped
     environment:
-      POSTGRES_DB: fastcrawl
+      POSTGRES_DB: public
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
@@ -18,5 +18,33 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
+  retriever:
+    build:
+      context: .
+      dockerfile: Dockerfile.retriever
+    container_name: fastcrawl-retriever
+    restart: unless-stopped
+    depends_on:
+      pgvector:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://postgresql:postgres@pgvector:5432
+      OPENAI_API_KEY: ${OPENAI_API_KEY?set OPENAI_API_KEY in env or .env}
+    ports:
+      - "8080:8080"
+    command:
+      [
+        "--database-url",
+        "${DATABASE_URL:-postgresql://postgres:postgres@pgvector:5432}",
+        "--schema",
+        "public",
+        "--table",
+        "wiki_chunks",
+        "--bind",
+        "0.0.0.0:8080",
+        "--openai-api-key",
+        "${OPENAI_API_KEY}",
+      ]
 
 volumes: {}
