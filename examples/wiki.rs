@@ -4,10 +4,15 @@ use std::sync::Arc;
 use url::Url;
 
 const SEEDS: &[&str] = &[
-    "https://en.wikipedia.org/wiki/Web_crawler",
-    "https://en.wikipedia.org/wiki/Hypertext_Transfer_Protocol",
-    "https://en.wikipedia.org/wiki/Capybara",
-    "https://en.wikipedia.org/wiki/Cat",
+    // "https://en.wikipedia.org/wiki/Web_crawler",
+    // "https://en.wikipedia.org/wiki/Hypertext_Transfer_Protocol",
+    // "https://en.wikipedia.org/wiki/Capybara",
+    // "https://en.wikipedia.org/wiki/Cat",
+    "https://en.wikipedia.org/wiki/Wikipedia:Vital_articles/Level/1",
+    "https://en.wikipedia.org/wiki/Wikipedia:Vital_articles/Level/2",
+    "https://en.wikipedia.org/wiki/Wikipedia:Vital_articles/Level/3",
+    "https://en.wikipedia.org/wiki/Wikipedia:Vital_articles/Level/4",
+    "https://en.wikipedia.org/wiki/Wikipedia:Vital_articles/Level/5",
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
