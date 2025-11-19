@@ -35,6 +35,8 @@ uv run wiki-trainer prepare-data \
 
 The command writes `train.jsonl` and `eval.jsonl` into `artifacts/datasets`. Each row keeps the original text plus metadata columns (`source_url`, `chunk_id`, `section_path`) so you can trace model behavior back to specific chunks.
 
+**Targeting specific facts.** Pass `--include-keyword "cherry hinton"` (repeatable) to only keep samples mentioning particular substrings, or `--require-keyword "cherry hinton hall"` to fail fast if the source corpus does not contain at least one chunk for that topic. This makes it easy to guarantee that the training data actually covers questions you care about.
+
 ## Fine-tuning a model
 
 Once the dataset exists, call `wiki-trainer train` with your preferred Hugging Face checkpoint. The defaults target `distilgpt2`, but you can swap in any causal LM (TinyLlama, Mistral, etc.) so long as it fits on your hardware.
@@ -53,6 +55,28 @@ uv run wiki-trainer train \
 ```
 
 The CLI wraps Hugging Face's `Trainer` so standard knobs (batch size, gradient accumulation, precision flags) are exposed. Logs/checkpoints land under `artifacts/checkpoints/...` by default.
+
+## Verifying coverage and chatting
+
+Before training, you can confirm that a dataset actually contains enough signal for a question:
+
+```sh
+uv run wiki-trainer verify-question \
+  "Where is the annual Cherry Music Festival held?" \
+  --dataset-dir artifacts/datasets
+```
+
+The check scans the prepared JSONL files for overlapping keywords and exits non-zero if the topic is missing, prompting you to refine `prepare-data` filters.
+
+After fine-tuning, chat with the checkpoint via:
+
+```sh
+uv run wiki-trainer chat artifacts/checkpoints \
+  --dataset-dir artifacts/datasets \
+  --max-new-tokens 160
+```
+
+The REPL refuses to answer prompts whose keywords do not appear in the training dataset, returning “I don’t know. That topic wasn’t in my training data.” instead of hallucinating.
 
 ## Tips
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 
 @dataclass(slots=True)
@@ -17,6 +17,8 @@ class DatasetConfig:
     eval_ratio: float = 0.02
     seed: int = 13
     shuffle: bool = True
+    include_keywords: Tuple[str, ...] = field(default_factory=tuple)
+    require_keywords: Tuple[str, ...] = field(default_factory=tuple)
 
     def resolved_input(self) -> Path:
         return self.input_path.expanduser().resolve()
@@ -31,6 +33,14 @@ class DatasetConfig:
     @property
     def eval_file(self) -> Path:
         return self.resolved_output() / "eval.jsonl"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "include_keywords", tuple(self._normalize_keywords(self.include_keywords)))
+        object.__setattr__(self, "require_keywords", tuple(self._normalize_keywords(self.require_keywords)))
+
+    @staticmethod
+    def _normalize_keywords(values) -> Tuple[str, ...]:
+        return tuple(sorted({value.strip().lower() for value in values if isinstance(value, str) and value.strip()}))
 
 
 @dataclass(slots=True)

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import typer
 
 from .config import DatasetConfig, TrainingConfig
+from .coverage import DatasetCoverage
 from .data import prepare_dataset
 from .training import train_model
+from .inference import ChatConfig, chat_loop
 
 app = typer.Typer(add_completion=False, help="Prepare Fastcrawl wiki chunks and fine-tune a local model.")
 
@@ -22,6 +24,18 @@ def prepare_data(
     eval_ratio: float = typer.Option(0.02, help="Portion of samples reserved for evaluation"),
     seed: int = typer.Option(13, help="RNG seed for shuffling"),
     no_shuffle: bool = typer.Option(False, help="Disable deterministic shuffling"),
+    include_keyword: Optional[List[str]] = typer.Option(
+        None,
+        "--include-keyword",
+        help="Keep only chunks whose text contains at least one of these substrings (case-insensitive).",
+        show_default=False,
+    ),
+    require_keyword: Optional[List[str]] = typer.Option(
+        None,
+        "--require-keyword",
+        help="Ensure at least one chunk contains this substring; fails if missing. Repeatable.",
+        show_default=False,
+    ),
 ):
     """Convert Fastcrawl wiki chunks into train/eval JSONL files."""
 
@@ -34,6 +48,8 @@ def prepare_data(
         eval_ratio=eval_ratio,
         seed=seed,
         shuffle=not no_shuffle,
+        include_keywords=tuple(include_keyword or []),
+        require_keywords=tuple(require_keyword or []),
     )
     counts = prepare_dataset(cfg)
     typer.echo(f"Wrote {counts['train']} train samples and {counts['eval']} eval samples to {cfg.resolved_output()}")
@@ -80,6 +96,53 @@ def train(
     )
     final_dir = train_model(cfg)
     typer.echo(f"Training run complete. Checkpoints saved to {final_dir}")
+
+
+@app.command("chat")
+def chat(
+    checkpoint_dir: Path = typer.Argument(Path("artifacts/checkpoints"), help="Directory with the fine-tuned checkpoint"),
+    max_new_tokens: int = typer.Option(160, help="Maximum tokens generated per turn"),
+    temperature: float = typer.Option(0.7, help="Sampling temperature (ignored when --greedy is set)"),
+    top_p: float = typer.Option(0.9, help="Top-p sampling cutoff"),
+    greedy: bool = typer.Option(False, help="Disable sampling and use greedy decoding"),
+    dataset_dir: Optional[Path] = typer.Option(
+        Path("artifacts/datasets"), help="Dataset directory used for training (enables coverage checks)."
+    ),
+    min_keyword_matches: int = typer.Option(2, help="Minimum keyword overlaps required to trust an answer"),
+    unknown_response: str = typer.Option(
+        "I don't know. That topic wasn't in my training data.", help="Fallback response when coverage is missing."
+    ),
+    prompt: Optional[str] = typer.Option(None, help="Optional one-off prompt to run before the REPL starts"),
+):
+    """Chat with a trained checkpoint using an interactive REPL."""
+
+    cfg = ChatConfig(
+        checkpoint_dir=checkpoint_dir,
+        dataset_dir=dataset_dir,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        do_sample=not greedy,
+        min_keyword_matches=min_keyword_matches,
+        unknown_response=unknown_response,
+    )
+    chat_loop(cfg, prompt=prompt)
+
+
+@app.command("verify-question")
+def verify_question(
+    question: str = typer.Argument(..., help="Question to verify against the prepared dataset"),
+    dataset_dir: Path = typer.Option(Path("artifacts/datasets"), help="Directory containing train/eval JSONL files"),
+    min_keyword_matches: int = typer.Option(2, help="Minimum keyword overlaps required to call it covered"),
+):
+    """Check if a dataset contains enough topical overlap to answer a question."""
+
+    coverage = DatasetCoverage(dataset_dir)
+    if coverage.has_topic(question, min_matches=min_keyword_matches):
+        typer.echo("Question appears in the dataset vocabulary; safe to train.")
+    else:
+        typer.echo("Dataset lacks coverage for that question.", err=True)
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

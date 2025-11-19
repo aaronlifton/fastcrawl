@@ -199,8 +199,8 @@ export DATABASE_URL=postgres://postgres:postgres@localhost:5432/fastcrawl
 ./bin/refresh.sh
 ```
 
-Override defaults with `FASTCRAWL_REFRESH_*` env vars (see the script). The script assumes the wiki crawl + normalization
-have already produced `data/wiki.jsonl` and `data/wiki_manifest.jsonl`.
+Override defaults with `FASTCRAWL_REFRESH_*` env vars (see the script). The script assumes the wiki crawl +
+normalization have already produced `data/wiki.jsonl` and `data/wiki_manifest.jsonl`.
 
 ## pgvector Store
 
@@ -317,8 +317,8 @@ Endpoints:
 - `POST /v1/query` – `{ "query": "When did Apollo 11 land?", "top_k": 6 }` returns scored chunks filtered by the token
   budget. Override the budget per request via `max_tokens`.
 
-Set one or more `--api-key` values (or `FASTCRAWL_API_KEY`) to require `X-API-Key` headers on every request. Combine that
-with the built-in rate limiter (`--max-requests-per-minute` / `--rate-limit-burst`) before exposing the service
+Set one or more `--api-key` values (or `FASTCRAWL_API_KEY`) to require `X-API-Key` headers on every request. Combine
+that with the built-in rate limiter (`--max-requests-per-minute` / `--rate-limit-burst`) before exposing the service
 publicly.
 
 The retriever now performs hybrid search: dense candidates from pgvector plus lexical matches taken from Postgres full-
@@ -362,8 +362,9 @@ Confidence level: High.
 enforce brevity, or tweak `--max-tokens` to bound the retriever token budget. The CLI expects `fastcrawl-retriever` to
 be running against the indexed Postgres instance so the hybrid path matches production behavior.
 
-Switch to Claude by adding `--llm-provider anthropic --anthropic-api-key ... --anthropic-model claude-3-sonnet-20240229`,
-or adjust `--max-completion-tokens` / `--temperature` to steer the answer style.
+Switch to Claude by adding
+`--llm-provider anthropic --anthropic-api-key ... --anthropic-model claude-3-sonnet-20240229`, or adjust
+`--max-completion-tokens` / `--temperature` to steer the answer style.
 
 ### Dockerized retriever
 
@@ -385,13 +386,15 @@ includes:
 
 - [x] **Corpus normalization** – strip boilerplate, capture metadata, and chunk pages into consistent token windows.
 
-2. **Embedding pipeline** – push cleaned chunks through an embedding model and store vectors (pgvector/Qdrant/Milvus)
-   with provenance.
-3. **Incremental refresh** – schedule revisits, diff pages, and update embeddings so the knowledge base stays current.
-4. **Training data generation** – turn chunks into instruction/QA pairs or causal LM samples; track licensing for
-   Wikipedia’s CC BY-SA requirements.
-5. **Retrieval-augmented answering** – wire the crawler to trigger re-indexing as new pages stream in, then expose a
-   lightweight API for LLMs to fetch relevant context on demand.
+- [x] **Embedding pipeline** – push cleaned chunks through an embedding model and store vectors (pgvector/Qdrant/Milvus)
+      with provenance.
+- [x] **Incremental refresh** – schedule revisits, diff pages, and update embeddings so the knowledge base stays
+      current.
+- [x] **Training data generation** – turn chunks into instruction/QA pairs or causal LM samples; track licensing for
+      Wikipedia’s CC BY-SA requirements.
+- [x] **Retrieval-augmented answering** – wire the crawler to trigger re-indexing as new pages stream in, then expose a
+      lightweight API for LLMs to fetch relevant context on demand.
+
 6. **Policy-aware agent** – use crawl metrics (latency, politeness) to drive an autonomous agent that decides which
    sections of the web to expand next based on embedding coverage gaps.
 

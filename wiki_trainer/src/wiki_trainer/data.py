@@ -69,8 +69,10 @@ def iter_text_fields(record: Dict) -> Iterator[Tuple[str, Dict]]:
                 yield chunk["text"], chunk
 
 
-def collect_samples(cfg: DatasetConfig) -> List[Sample]:
+def collect_samples(cfg: DatasetConfig) -> Tuple[List[Sample], Dict[str, bool], Dict[str, str]]:
     samples: List[Sample] = []
+    required_hits: Dict[str, bool] = {kw: False for kw in cfg.require_keywords}
+    required_rejections: Dict[str, str] = {}
     path = cfg.resolved_input()
     if not path.exists():
         raise FileNotFoundError(f"input JSONL file not found: {path}")
@@ -84,9 +86,21 @@ def collect_samples(cfg: DatasetConfig) -> List[Sample]:
             url = detect_url(record)
             for text_value, text_record in iter_text_fields(record):
                 cleaned = clean_text(text_value)
+                text_lower = cleaned.lower()
+                for keyword in cfg.require_keywords:
+                    if keyword in text_lower:
+                        required_hits[keyword] = True
+                rejected_reason: Optional[str] = None
                 if len(cleaned) < cfg.min_chars:
-                    continue
-                if cfg.max_chars and len(cleaned) > cfg.max_chars:
+                    rejected_reason = "below min_chars"
+                elif cfg.max_chars and len(cleaned) > cfg.max_chars:
+                    rejected_reason = "above max_chars"
+                elif cfg.include_keywords and not any(keyword in text_lower for keyword in cfg.include_keywords):
+                    rejected_reason = "missing include_keyword"
+                if rejected_reason:
+                    for keyword in cfg.require_keywords:
+                        if keyword in text_lower and keyword not in required_rejections:
+                            required_rejections[keyword] = rejected_reason
                     continue
                 chunk_id = text_record.get("chunk_id")
                 if isinstance(chunk_id, str):
@@ -106,8 +120,8 @@ def collect_samples(cfg: DatasetConfig) -> List[Sample]:
                     )
                 )
                 if cfg.max_chunks and len(samples) >= cfg.max_chunks:
-                    return samples
-    return samples
+                    return samples, required_hits, required_rejections
+    return samples, required_hits, required_rejections
 
 
 def write_jsonl(path: Path, rows: Iterable[Sample]) -> int:
@@ -121,9 +135,22 @@ def write_jsonl(path: Path, rows: Iterable[Sample]) -> int:
 
 
 def prepare_dataset(cfg: DatasetConfig) -> Dict[str, int]:
-    samples = collect_samples(cfg)
+    samples, required_hits, required_rejections = collect_samples(cfg)
     if not samples:
         raise ValueError("no samples matched the filtering criteria")
+    if cfg.require_keywords:
+        missing = [kw for kw, seen in required_hits.items() if not seen]
+        if missing:
+            details = []
+            for keyword in missing:
+                reason = required_rejections.get(keyword)
+                if reason:
+                    details.append(f"{keyword} (skipped because {reason})")
+                else:
+                    details.append(keyword)
+            raise ValueError(
+                "required keyword(s) not found in dataset: " + ", ".join(details)
+            )
 
     if cfg.shuffle:
         rng = random.Random(cfg.seed)
