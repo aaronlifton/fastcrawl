@@ -144,8 +144,11 @@ cargo run --example wiki -- \
   --normalize \
   --normalize-jsonl data/wiki.jsonl \
   --normalize-manifest-jsonl data/wiki_manifest.jsonl \
+  --normalize-shards 4 \
   --duration-secs 4
 ```
+
+Tip: when `--normalize-shards N` is greater than 1, the crawler stripes output into `data/wiki.jsonl.part{0..N-1}` for faster disk writes; concatenate them afterwards with `cat data/wiki.jsonl.part* > data/wiki.jsonl` (manifest stays single and already deduped).
 
 Once that finishes, run the embedder command:
 

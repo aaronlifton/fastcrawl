@@ -16,26 +16,22 @@ use crate::{Cli, CrawlControls};
 use futures_util::future::join_all;
 use reqwest::{header::HeaderMap, Client};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
-#[cfg(feature = "multi_thread")]
-use std::{
-    collections::hash_map::DefaultHasher,
-    hash::{Hash, Hasher},
-};
 use tokio::runtime::Builder;
 use tokio::sync::mpsc;
 #[cfg(feature = "multi_thread")]
 use tokio::sync::Mutex;
 use tokio::task::{spawn_local, yield_now, LocalSet};
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use url::Url;
 
 const USER_AGENT: &str = "fastcrawl-example/0.1 (+https://github.com/aaronlifton/fastcrawl)";
@@ -48,7 +44,9 @@ const SHARD_STACK_SIZE: usize = 8 * 1024 * 1024;
 const DEFAULT_REMOTE_BATCH_SIZE: usize = 8;
 #[cfg(feature = "multi_thread")]
 const REMOTE_BUFFER_MAX_IDLE_PAGES: u8 = 4;
-const NORMALIZATION_CHANNEL_CAPACITY: usize = 256;
+// Bounded channels between crawlers and normalization writers. Larger buffers
+// reduce the chance of stalling when the manifest/file writers momentarily lag.
+const NORMALIZATION_CHANNEL_CAPACITY: usize = 4096;
 
 /// Predicate used to accept or reject discovered URLs.
 pub type UrlFilter = Arc<dyn Fn(&Url) -> bool + Send + Sync>;
@@ -299,6 +297,7 @@ async fn run_single_thread(cli: Cli, seeds: &[&str], filter: UrlFilter) -> Resul
     seed_frontier(state.frontier.as_ref(), seeds).await;
     let start = Instant::now();
 
+    let heartbeat = spawn_heartbeat(&state);
     let dispatcher = {
         let frontier = Arc::clone(&state.frontier);
         let registry = Arc::clone(&state.registry);
@@ -312,7 +311,7 @@ async fn run_single_thread(cli: Cli, seeds: &[&str], filter: UrlFilter) -> Resul
         workers.push(spawn_streaming_worker(&state, id));
     }
 
-    finish_run(state, dispatcher, workers, start, true).await;
+    finish_run(state, dispatcher, workers, start, true, Some(heartbeat)).await;
     Ok(())
 }
 
@@ -395,6 +394,7 @@ async fn run_shard_streaming(
     seed_partitioned_frontier(state.frontier.as_ref(), &seeds, &partition).await;
     let start = Instant::now();
 
+    let heartbeat = spawn_heartbeat(&state);
     let dispatcher = {
         let frontier = Arc::clone(&state.frontier);
         let registry = Arc::clone(&state.registry);
@@ -431,7 +431,7 @@ async fn run_shard_streaming(
     workers.push(inbox_handle);
 
     let metrics_for_flush = Arc::clone(&state.metrics);
-    finish_run(state, dispatcher, workers, start, false).await;
+    finish_run(state, dispatcher, workers, start, false, Some(heartbeat)).await;
     router.flush_all(metrics_for_flush.as_ref()).await;
     Ok(())
 }
@@ -442,6 +442,7 @@ async fn finish_run(
     workers: Vec<tokio::task::JoinHandle<()>>,
     start: Instant,
     report_metrics: bool,
+    heartbeat: Option<tokio::task::JoinHandle<()>>,
 ) {
     sleep(state.run_duration).await;
     state.stop_requested.store(true, Ordering::Release);
@@ -458,6 +459,9 @@ async fn finish_run(
 
     let _ = dispatcher.await;
     join_all(workers).await;
+    if let Some(hb) = heartbeat {
+        let _ = hb.await;
+    }
     if report_metrics {
         state.metrics.report(start.elapsed());
     }
@@ -521,6 +525,33 @@ fn spawn_streaming_worker_sharded(
             normalization,
         )
         .await;
+    })
+}
+
+fn spawn_heartbeat(state: &AppState) -> tokio::task::JoinHandle<()> {
+    let frontier = Arc::clone(&state.frontier);
+    let active_tasks = Arc::clone(&state.active_tasks);
+    let metrics = Arc::clone(&state.metrics);
+    let stop_requested = Arc::clone(&state.stop_requested);
+    spawn_local(async move {
+        let mut tick: u64 = 0;
+        loop {
+            sleep(Duration::from_secs(10)).await;
+            let pending = frontier.pending();
+            let active = active_tasks.load(Ordering::Acquire);
+            let fetched = metrics.pages_fetched.load(Ordering::Relaxed);
+            let discovered = metrics.urls_discovered.load(Ordering::Relaxed);
+            let enqueued = metrics.urls_enqueued.load(Ordering::Relaxed);
+            let dupes = metrics.duplicates_filtered.load(Ordering::Relaxed);
+            eprintln!(
+                "[hb] tick={} pending={} active={} fetched={} discovered={} enqueued={} dupes={}",
+                tick, pending, active, fetched, discovered, enqueued, dupes
+            );
+            tick += 1;
+            if stop_requested.load(Ordering::Acquire) && pending == 0 && active == 0 {
+                break;
+            }
+        }
     })
 }
 
@@ -1102,61 +1133,105 @@ async fn shard_inbox_loop<const QUEUE: usize, const SEEN: usize>(
 
 struct NormalizationHandle {
     config: NormalizationConfig,
-    sender: Option<mpsc::Sender<NormalizedPage>>,
-    writer: Option<std::thread::JoinHandle<()>>,
+    stripes: usize,
+    page_senders: Option<Vec<mpsc::Sender<Arc<NormalizedPage>>>>,
+    page_writers: Option<Vec<std::thread::JoinHandle<()>>>,
+    manifest_sender: Option<mpsc::Sender<Arc<NormalizedPage>>>,
+    manifest_writer: Option<std::thread::JoinHandle<()>>,
 }
 
 impl NormalizationHandle {
     fn new(settings: NormalizationSettings) -> io::Result<Self> {
-        let page_sink = JsonlSink::new(settings.output_path)?;
-        let manifest_sink = match settings.manifest_path {
-            Some(path) => Some(ManifestWriter::new(path)?),
-            None => None,
-        };
-        let (sender, receiver) = mpsc::channel(NORMALIZATION_CHANNEL_CAPACITY);
+        let stripes = settings.stripes.max(1);
 
-        let writer = thread::Builder::new()
-            .name("fastcrawl-normalize-writer".into())
-            .spawn(move || {
-                let mut receiver: mpsc::Receiver<NormalizedPage> = receiver;
-                let mut manifest_sink = manifest_sink;
-                while let Some(page) = receiver.blocking_recv() {
-                    if let Err(err) = page_sink.write_json(&page) {
-                        eprintln!("normalization writer error: {err}");
-                    }
-                    if let Some(sink) = manifest_sink.as_mut() {
-                        if let Err(err) = sink.write_page(&page) {
-                            eprintln!("normalization manifest error: {err}");
+        let mut page_senders = Vec::with_capacity(stripes);
+        let mut page_writers = Vec::with_capacity(stripes);
+
+        for stripe in 0..stripes {
+            let sink_path = stripe_path(&settings.output_path, stripe, stripes);
+            let page_sink = JsonlSink::new(sink_path)?;
+            let (sender, receiver) = mpsc::channel(NORMALIZATION_CHANNEL_CAPACITY);
+
+            let handle = thread::Builder::new()
+                .name(format!("fastcrawl-normalize-writer-{stripe}"))
+                .spawn(move || {
+                    let mut receiver: mpsc::Receiver<Arc<NormalizedPage>> = receiver;
+                    while let Some(page) = receiver.blocking_recv() {
+                        if let Err(err) = page_sink.write_json(&*page) {
+                            eprintln!("normalization writer error: {err}");
                         }
                     }
-                }
-            })
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+                })
+                .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+
+            page_senders.push(sender);
+            page_writers.push(handle);
+        }
+
+        let (manifest_sender, manifest_writer) = match settings.manifest_path {
+            Some(path) => {
+                let (sender, receiver) = mpsc::channel(NORMALIZATION_CHANNEL_CAPACITY);
+                let handle = thread::Builder::new()
+                    .name("fastcrawl-normalize-manifest".into())
+                    .spawn(move || {
+                        let mut receiver: mpsc::Receiver<Arc<NormalizedPage>> = receiver;
+                        let mut manifest_sink =
+                            ManifestWriter::new(path).unwrap_or_else(|err| {
+                                panic!("failed to open manifest sink: {err}")
+                            });
+                        while let Some(page) = receiver.blocking_recv() {
+                            if let Err(err) = manifest_sink.write_page(&page) {
+                                eprintln!("normalization manifest error: {err}");
+                            }
+                        }
+                    })
+                    .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+                (Some(sender), Some(handle))
+            }
+            None => (None, None),
+        };
 
         Ok(Self {
             config: settings.config,
-            sender: Some(sender),
-            writer: Some(writer),
+            stripes,
+            page_senders: Some(page_senders),
+            page_writers: Some(page_writers),
+            manifest_sender,
+            manifest_writer,
         })
     }
 }
 
 impl NormalizationHandle {
-    fn sender(&self) -> mpsc::Sender<NormalizedPage> {
-        self.sender
+    fn page_senders(&self) -> Vec<mpsc::Sender<Arc<NormalizedPage>>> {
+        self.page_senders
             .as_ref()
-            .expect("normalization sender missing")
+            .expect("normalization page senders missing")
             .clone()
+    }
+
+    fn manifest_sender(&self) -> Option<mpsc::Sender<Arc<NormalizedPage>>> {
+        self.manifest_sender.clone()
     }
 }
 
 impl Drop for NormalizationHandle {
     fn drop(&mut self) {
-        // Drop our sender handle so the writer thread can observe channel closure.
-        self.sender.take();
-        if let Some(writer) = self.writer.take() {
+        // Drop senders so writer threads can observe channel closure.
+        self.page_senders.take();
+        self.manifest_sender.take();
+
+        if let Some(writers) = self.page_writers.take() {
+            for writer in writers {
+                if let Err(err) = writer.join() {
+                    eprintln!("normalization writer thread exited with error: {err:?}");
+                }
+            }
+        }
+
+        if let Some(writer) = self.manifest_writer.take() {
             if let Err(err) = writer.join() {
-                eprintln!("normalization writer thread exited with error: {err:?}");
+                eprintln!("normalization manifest thread exited with error: {err:?}");
             }
         }
     }
@@ -1185,6 +1260,35 @@ impl ManifestWriter {
         let record = ManifestRecord::new(url, meta.checksum, fetched, changed);
         self.sink.write_json(&record)
     }
+}
+
+fn stripe_path(base: &Path, stripe: usize, total: usize) -> PathBuf {
+    if total <= 1 {
+        return base.to_path_buf();
+    }
+    let parent = base.parent().filter(|p| !p.as_os_str().is_empty());
+    let stem = base
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("normalized");
+    let ext = base.extension().and_then(|s| s.to_str());
+    let filename = match ext {
+        Some(ext) => format!("{stem}.part{stripe}.{ext}"),
+        None => format!("{stem}.part{stripe}"),
+    };
+    match parent {
+        Some(dir) => dir.join(filename),
+        None => PathBuf::from(filename),
+    }
+}
+
+fn stripe_hash(url: &Url, stripes: usize) -> usize {
+    if stripes <= 1 {
+        return 0;
+    }
+    let mut hasher = DefaultHasher::new();
+    url.as_str().hash(&mut hasher);
+    (hasher.finish() as usize) % stripes.max(1)
 }
 
 fn load_manifest_digests(path: &Path) -> io::Result<HashMap<String, (u32, u64)>> {
@@ -1217,7 +1321,9 @@ fn load_manifest_digests(path: &Path) -> io::Result<HashMap<String, (u32, u64)>>
 struct NormalizationRuntime {
     shard: Option<usize>,
     normalizer: Normalizer,
-    sender: mpsc::Sender<NormalizedPage>,
+    stripes: usize,
+    page_senders: Vec<mpsc::Sender<Arc<NormalizedPage>>>,
+    manifest_sender: Option<mpsc::Sender<Arc<NormalizedPage>>>,
 }
 
 impl NormalizationRuntime {
@@ -1225,7 +1331,9 @@ impl NormalizationRuntime {
         Self {
             shard,
             normalizer: Normalizer::new(handle.config),
-            sender: handle.sender(),
+            stripes: handle.stripes,
+            page_senders: handle.page_senders(),
+            manifest_sender: handle.manifest_sender(),
         }
     }
 
@@ -1247,11 +1355,45 @@ impl NormalizationRuntime {
             .normalize(&page)
             .map_err(NormalizationJobError::Normalize)?;
 
-        self.sender
-            .send(normalized)
-            .await
-            .map_err(|err| NormalizationJobError::Channel(err.0.metadata.url.to_string()))
-            .map(|_| ())
+        let normalized = Arc::new(normalized);
+        let stripe = self.pick_stripe(&normalized);
+
+        if let Some(manifest) = &self.manifest_sender {
+            send_with_backpressure_log("manifest", manifest, Arc::clone(&normalized)).await?;
+        }
+
+        send_with_backpressure_log("page", &self.page_senders[stripe], normalized).await
+    }
+
+    fn pick_stripe(&self, normalized: &Arc<NormalizedPage>) -> usize {
+        if self.stripes == 1 {
+            return 0;
+        }
+        if let Some(shard) = self.shard {
+            return shard % self.stripes;
+        }
+        stripe_hash(&normalized.metadata.url, self.stripes)
+    }
+}
+
+async fn send_with_backpressure_log(
+    label: &str,
+    sender: &mpsc::Sender<Arc<NormalizedPage>>,
+    page: Arc<NormalizedPage>,
+) -> Result<(), NormalizationJobError> {
+    match timeout(Duration::from_secs(5), sender.send(Arc::clone(&page))).await {
+        Ok(result) => result
+            .map_err(|err| NormalizationJobError::Channel(err.0.metadata.url.to_string())),
+        Err(_) => {
+            eprintln!(
+                "normalization channel blocked for >5s ({label}); url={}",
+                page.metadata.url
+            );
+            sender
+                .send(page)
+                .await
+                .map_err(|err| NormalizationJobError::Channel(err.0.metadata.url.to_string()))
+        }
     }
 }
 
@@ -1527,6 +1669,7 @@ async fn wait_for_drain<
     frontier: &Frontier<QUEUE, SEEN>,
     active_tasks: &AtomicUsize,
 ) {
+    let mut polls = 0usize;
     loop {
         let workers_idle = active_tasks.load(Ordering::Acquire) == 0;
         let agents_idle = registry.iter().all(|agent| agent.backlog() == 0);
@@ -1534,6 +1677,17 @@ async fn wait_for_drain<
 
         if workers_idle && agents_idle && frontier_idle {
             break;
+        }
+
+        polls += 1;
+        if polls % 50 == 0 {
+            let pending = frontier.pending();
+            let active = active_tasks.load(Ordering::Acquire);
+            let backlogs: Vec<_> = registry.iter().map(|a| a.backlog()).collect();
+            eprintln!(
+                "[drain] pending={} active_tasks={} backlogs={:?}",
+                pending, active, backlogs
+            );
         }
 
         sleep(DRAIN_POLL_INTERVAL).await;

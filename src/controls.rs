@@ -109,6 +109,10 @@ pub struct Cli {
     #[arg(long, env = "FASTCRAWL_NORMALIZE_MANIFEST")]
     pub normalize_manifest_jsonl: Option<PathBuf>,
 
+    /// Number of striped JSONL writers (>=1). >1 speeds up disk writes at the cost of non-deterministic order.
+    #[arg(long, env = "FASTCRAWL_NORMALIZE_SHARDS", default_value_t = 1)]
+    pub normalize_shards: usize,
+
     /// Target tokens per chunk emitted by the normalizer
     #[arg(long, env = "FASTCRAWL_NORMALIZE_TOKENS", default_value_t = 256)]
     pub normalize_chunk_tokens: usize,
@@ -178,6 +182,7 @@ impl Cli {
         Some(NormalizationSettings {
             output_path: PathBuf::from(&self.normalize_jsonl),
             manifest_path: self.normalize_manifest_jsonl.clone(),
+            stripes: self.normalize_shards.max(1),
             config: NormalizationConfig {
                 chunk_target_tokens: chunk_target,
                 chunk_overlap_tokens: chunk_overlap,
@@ -240,6 +245,8 @@ pub struct NormalizationSettings {
     pub output_path: PathBuf,
     /// Optional path for digest manifest records.
     pub manifest_path: Option<PathBuf>,
+    /// Number of striped JSONL writers (>=1). >1 speeds up disk writes at the cost of non-deterministic order.
+    pub stripes: usize,
     /// Chunking/cleanup configuration applied to each page.
     pub config: NormalizationConfig,
 }
