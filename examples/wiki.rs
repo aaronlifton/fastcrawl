@@ -26,6 +26,7 @@ fn wiki_filter(url: &Url) -> bool {
         "Special:",
         "Help:",
         "Help_talk:",
+        "Wikipedia_talk:",
         "Wikipedia:",
         "Talk:",
         "User:",

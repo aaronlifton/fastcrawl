@@ -1,0 +1,26 @@
+#!/usr/sbin/python
+
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+ckpt = "artifacts/checkpoints"
+tokenizer = AutoTokenizer.from_pretrained(ckpt)
+model = AutoModelForCausalLM.from_pretrained(ckpt)
+model.eval()
+
+print("Type your prompt (empty line to quit)\n")
+while True:
+    prompt = input("> ").strip()
+    if not prompt:
+        break
+    inputs = tokenizer(prompt, return_tensors="pt")
+    with torch.no_grad():
+        out_ids = model.generate(
+            **inputs,
+            max_new_tokens=160,
+            temperature=0.8,
+            top_p=0.9,
+            do_sample=True,
+            pad_token_id=tokenizer.eos_token_id,
+        )
+    print(tokenizer.decode(out_ids[0], skip_special_tokens=True))
+    print()

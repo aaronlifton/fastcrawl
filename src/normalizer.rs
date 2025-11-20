@@ -2,7 +2,7 @@
 
 use crc32fast::Hasher as Crc32;
 use reqwest::header::{HeaderMap, HeaderName, CONTENT_LANGUAGE, CONTENT_TYPE};
-use scraper::{Html, Selector};
+use scraper::{ElementRef, Html, Selector};
 use serde::de::{self, Deserializer};
 use serde::ser::{SerializeStruct, Serializer};
 use serde::{Deserialize, Serialize};
@@ -418,6 +418,10 @@ impl<'cfg> BlockCollector<'cfg> {
             return;
         }
 
+        if is_navbox_descendant(&element) {
+            return;
+        }
+
         let kind = match tag {
             "h1" => Some(BlockKind::Heading { level: 1 }),
             "h2" => Some(BlockKind::Heading { level: 2 }),
@@ -518,6 +522,20 @@ fn collapse_whitespace(input: &str) -> String {
         }
     }
     buf.trim().to_string()
+}
+
+fn is_navbox_descendant(element: &ElementRef<'_>) -> bool {
+    element
+        .ancestors()
+        .filter_map(ElementRef::wrap)
+        .any(|ancestor| ancestor_has_navbox_class(&ancestor))
+}
+
+fn ancestor_has_navbox_class(element: &ElementRef<'_>) -> bool {
+    element
+        .value()
+        .classes()
+        .any(|class_name| class_name.eq_ignore_ascii_case("navbox") || class_name.contains("navbox"))
 }
 
 fn collapse_newlines(input: &str) -> String {
@@ -695,5 +713,52 @@ mod tests {
             let b = &w[1];
             a.char_end > b.char_start || a.char_end == b.char_start
         }));
+    }
+
+    #[test]
+    fn skips_navbox_content() {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/html"));
+        let body = br#"
+            <html>
+              <body>
+                <article>
+                  <h1>Example</h1>
+                  <p>Lead paragraph stays.</p>
+                  <div class="navbox">
+                    <ul>
+                      <li>Navbox item one</li>
+                      <li>Navbox item two</li>
+                    </ul>
+                  </div>
+                  <p>Main content should remain.</p>
+                </article>
+              </body>
+            </html>
+        "#
+        .to_vec();
+
+        let page = FetchedPage::new(
+            Url::parse("https://example.com/navbox").unwrap(),
+            1,
+            SystemTime::now(),
+            200,
+            headers,
+            body,
+        );
+
+        let normalizer = Normalizer::new(NormalizationConfig::default());
+        let normalized = normalizer.normalize(&page).expect("normalize");
+
+        assert!(normalized
+            .body_text
+            .contains("Lead paragraph stays."));
+        assert!(normalized
+            .body_text
+            .contains("Main content should remain."));
+        assert!(
+            !normalized.body_text.contains("Navbox item"),
+            "navbox text should be skipped"
+        );
     }
 }

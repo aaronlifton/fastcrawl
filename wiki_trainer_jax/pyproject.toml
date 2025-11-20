@@ -1,0 +1,32 @@
+[project]
+name = "wiki-trainer-jax"
+version = "0.1.0"
+description = "Fastcrawl wiki fine-tuning utilities powered by JAX + MetraX"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "typer>=0.12.5",
+  "numpy>=1.26.0",
+  "tqdm>=4.66.0",
+  "orjson>=3.10.0",
+  "sentencepiece>=0.2.0",
+  "jax==0.8.1",
+  "jaxlib==0.8.1",
+  "flax>=0.8.5",
+  "optax>=0.2.4",
+  "google-metrax==0.2.4",
+  "orbax-checkpoint>=0.5.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.1.0", "ruff>=0.6.0"]
+
+[project.scripts]
+wiki-trainer-jax = "wiki_trainer_jax.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wiki_trainer_jax"]
