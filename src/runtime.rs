@@ -31,7 +31,7 @@ use tokio::sync::mpsc;
 #[cfg(feature = "multi_thread")]
 use tokio::sync::Mutex;
 use tokio::task::{spawn_local, yield_now, LocalSet};
-use tokio::time::{sleep, timeout};
+use tokio::time::{interval, sleep, sleep_until, timeout, Instant as TokioInstant};
 use url::Url;
 
 const USER_AGENT: &str = "fastcrawl-example/0.1 (+https://github.com/aaronlifton/fastcrawl)";
@@ -375,7 +375,9 @@ fn run_multi_thread(cli: Cli, seeds: &[&str], filter: UrlFilter) -> Result<(), D
         handle.join().expect("shard thread panicked")?;
     }
 
-    shared.metrics.report(start.elapsed());
+    shared
+        .metrics
+        .report(start.elapsed(), shared.run_duration);
     Ok(())
 }
 
@@ -444,7 +446,7 @@ async fn finish_run(
     report_metrics: bool,
     heartbeat: Option<tokio::task::JoinHandle<()>>,
 ) {
-    sleep(state.run_duration).await;
+    wait_for_stop_signal(&state).await;
     state.stop_requested.store(true, Ordering::Release);
     wait_for_drain(
         state.registry.as_ref(),
@@ -463,7 +465,39 @@ async fn finish_run(
         let _ = hb.await;
     }
     if report_metrics {
-        state.metrics.report(start.elapsed());
+        state
+            .metrics
+            .report(start.elapsed(), state.run_duration);
+    }
+}
+
+async fn wait_for_stop_signal(state: &AppState) {
+    let deadline = TokioInstant::now() + state.run_duration;
+    let mut idle_ticks = 0usize;
+    let mut ticker = interval(Duration::from_secs(5));
+
+    loop {
+        tokio::select! {
+            _ = sleep_until(deadline) => break,
+            _ = ticker.tick() => {
+                let pending = state.frontier.pending();
+                let active = state.active_tasks.load(Ordering::Acquire);
+                let backlog: usize = state.registry.iter().map(|a| a.backlog()).sum();
+                if pending == 0 && active == 0 && backlog == 0 {
+                    idle_ticks += 1;
+                    if idle_ticks >= 3 {
+                        eprintln!(
+                            "[idle] frontier empty for {}s, ending early (run window {}s)",
+                            idle_ticks * 5,
+                            state.run_duration.as_secs()
+                        );
+                        break;
+                    }
+                } else {
+                    idle_ticks = 0;
+                }
+            }
+        }
     }
 }
 
@@ -1560,12 +1594,21 @@ impl Metrics {
         self.remote_batches.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn report(&self, elapsed: Duration) {
-        let secs = elapsed.as_secs_f32().max(f32::EPSILON);
+    fn report(&self, elapsed: Duration, crawl_window: Duration) {
+        let wall_secs = elapsed.as_secs_f32().max(f32::EPSILON);
+        let crawl_secs = crawl_window.as_secs_f32().max(f32::EPSILON);
         let fetched = self.pages_fetched.load(Ordering::Relaxed);
-        println!("--- crawl metrics ({secs:.2}s) ---");
+        println!(
+            "--- crawl metrics ({wall_secs:.2}s elapsed, {crawl_secs:.2}s crawl window) ---"
+        );
         println!("pages fetched: {}", fetched);
-        println!("urls fetched/sec: {:.2}", fetched as f32 / secs);
+        println!("urls fetched/sec: {:.2}", fetched as f32 / crawl_secs);
+        if wall_secs > crawl_secs + f32::EPSILON {
+            println!(
+                "urls fetched/sec (incl. drain): {:.2}",
+                fetched as f32 / wall_secs
+            );
+        }
         println!(
             "urls discovered: {}",
             self.urls_discovered.load(Ordering::Relaxed)
