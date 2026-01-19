@@ -2,3 +2,4 @@ target/
 personal_docs/
 data/
 embeddings.jsonl
+*.txt
