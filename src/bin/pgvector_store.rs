@@ -86,6 +86,7 @@ async fn main() -> Result<()> {
     if cli.prepare_table {
         ensure_vector_extension(&mut client).await?;
         ensure_table(&mut client, &table, dims).await?;
+        ensure_block_index_column(&mut client, &table).await?;
     }
     if cli.prepare_fts {
         ensure_fts_column(&mut client, &table).await?;
@@ -137,6 +138,7 @@ async fn ensure_table(client: &mut Client, table: &TableName, dims: usize) -> Re
         "CREATE TABLE IF NOT EXISTS {} (
             url TEXT NOT NULL,
             chunk_id BIGINT NOT NULL,
+            block_index BIGINT NOT NULL,
             text TEXT NOT NULL,
             section_path JSONB NOT NULL,
             token_estimate BIGINT NOT NULL,
@@ -152,6 +154,18 @@ async fn ensure_table(client: &mut Client, table: &TableName, dims: usize) -> Re
         .execute(&ddl, &[])
         .await
         .context("failed to create pgvector table")?;
+    Ok(())
+}
+
+async fn ensure_block_index_column(client: &mut Client, table: &TableName) -> Result<()> {
+    let alter = format!(
+        "ALTER TABLE {} ADD COLUMN IF NOT EXISTS block_index BIGINT NOT NULL DEFAULT 0",
+        table.qualified()
+    );
+    client
+        .execute(&alter, &[])
+        .await
+        .context("failed to ensure block_index column")?;
     Ok(())
 }
 
@@ -198,6 +212,7 @@ async fn insert_batch(
         let vector = Vector::from(record.embedding.clone());
         let section_path = Json(record.section_path.clone());
         let chunk_id = as_i64(record.chunk_id, "chunk_id")?;
+        let block_index = as_i64(record.block_index, "block_index")?;
         let token_estimate = as_i64(record.token_estimate, "token_estimate")?;
         let checksum = as_i64(record.checksum, "checksum")?;
         let last_seen = as_i64(record.last_seen_epoch_ms, "last_seen_epoch_ms")?;
@@ -207,6 +222,7 @@ async fn insert_batch(
                 &[
                     &record.url,
                     &chunk_id,
+                    &block_index,
                     &record.text,
                     &section_path,
                     &token_estimate,
@@ -231,13 +247,14 @@ fn insert_sql(table: &TableName, upsert: bool) -> String {
     let qualified = table.qualified();
     let mut sql = format!(
         "INSERT INTO {} \
-            (url, chunk_id, text, section_path, token_estimate, embedding, checksum, last_seen_epoch_ms) \
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            (url, chunk_id, block_index, text, section_path, token_estimate, embedding, checksum, last_seen_epoch_ms) \
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         qualified
     );
     if upsert {
         sql.push_str(
             " ON CONFLICT (url, chunk_id) DO UPDATE SET \
+                block_index = EXCLUDED.block_index, \
                 text = EXCLUDED.text, \
                 section_path = EXCLUDED.section_path, \
                 token_estimate = EXCLUDED.token_estimate, \

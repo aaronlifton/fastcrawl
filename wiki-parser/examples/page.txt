@@ -1,0 +1,1899 @@
+[
+  {
+    "type": "paragraph",
+    "text": "Rust is a general-purpose programming language. It is noted for its emphasis on performance, type safety, concurrency, and memory safety.",
+    "section_path": [],
+    "index": 0
+  },
+  {
+    "type": "paragraph",
+    "text": "Rust supports multiple programming paradigms. It was influenced by ideas from functional programming, including immutability, higher-order functions, algebraic data types, and pattern matching. It also supports object-oriented programming via structs, enums, traits, and methods. Rust is noted for enforcing memory safety (i.e., that all references point to valid memory) without a conventional garbage collector; instead, memory safety errors and data races are prevented by the \"borrow checker\", which tracks the object lifetime of references at compile time.",
+    "section_path": [],
+    "index": 1
+  },
+  {
+    "type": "paragraph",
+    "text": "Software developer Graydon Hoare created Rust in 2006 while working at Mozilla, which officially sponsored the project in 2009. The first stable release, Rust 1.0, was published in May 2015. Following a layoff of Mozilla employees in August 2020, four other companies joined Mozilla in sponsoring Rust through the creation of the Rust Foundation in February 2021.",
+    "section_path": [],
+    "index": 2
+  },
+  {
+    "type": "paragraph",
+    "text": "Rust has been adopted by many software projects, especially web services and system software. It has been studied academically and has a growing community of developers.",
+    "section_path": [],
+    "index": 3
+  },
+  {
+    "type": "heading",
+    "text": "History",
+    "section_path": [
+      "History"
+    ],
+    "index": 4
+  },
+  {
+    "type": "heading",
+    "text": "2006–2009: Early years",
+    "section_path": [
+      "History",
+      "2006–2009: Early years"
+    ],
+    "index": 5
+  },
+  {
+    "type": "paragraph",
+    "text": "Rust began as a personal project by Mozilla employee Graydon Hoare in 2006. According to MIT Technology Review, he started the project due to his frustration with a broken elevator in his apartment building whose software had crashed, and named the language after the group of fungi of the same name that is \"over-engineered for survival\". During the time period between 2006 and 2009, Rust was not publicized to others at Mozilla and was written in Hoare's free time; Hoare began speaking about the language around 2009 after a small group at Mozilla became interested in the project. Hoare cited languages from the 1970s, 1980s, and 1990s as influences — including CLU, BETA, Mesa, NIL, Erlang, Newsqueak, Napier, Hermes, Sather, Alef, and Limbo. He described the language as \"technology from the past come to save the future from itself.\" Early Rust developer Manish Goregaokar similarly described Rust as being based on \"mostly decades-old research.\"",
+    "section_path": [
+      "History",
+      "2006–2009: Early years"
+    ],
+    "index": 6
+  },
+  {
+    "type": "paragraph",
+    "text": "During the early years, the Rust compiler was written in about 38,000 lines of OCaml. Features of early Rust that were later removed include explicit object-oriented programming via an obj keyword, and a typestates system for variable state changes (such as going from uninitialized to initialized).",
+    "section_path": [
+      "History",
+      "2006–2009: Early years"
+    ],
+    "index": 7
+  },
+  {
+    "type": "heading",
+    "text": "2009–2012: Mozilla sponsorship",
+    "section_path": [
+      "History",
+      "2009–2012: Mozilla sponsorship"
+    ],
+    "index": 8
+  },
+  {
+    "type": "paragraph",
+    "text": "Mozilla officially sponsored the Rust project in 2009. Brendan Eich and other executives, intrigued by the possibility of using Rust for a safe web browser engine, placed engineers on the project including Patrick Walton, Niko Matsakis, Felix Klock, and Manish Goregaokar. A conference room taken by the project developers was dubbed \"the nerd cave,\" with a sign placed outside the door.",
+    "section_path": [
+      "History",
+      "2009–2012: Mozilla sponsorship"
+    ],
+    "index": 9
+  },
+  {
+    "type": "paragraph",
+    "text": "During this time period, work had shifted from the initial OCaml compiler to a self-hosting compiler (i.e., written in Rust) targetting LLVM. The ownership system was in place by 2010. The Rust logo was developed in 2011 based on a bicycle chainring.",
+    "section_path": [
+      "History",
+      "2009–2012: Mozilla sponsorship"
+    ],
+    "index": 10
+  },
+  {
+    "type": "paragraph",
+    "text": "Rust 0.1 became the first public release on January 20, 2012 for Windows, Linux, and MacOS. The early 2010s witnessed an increasing number of full-time engineers at Mozilla, as well as increasing involvement from open source volunteers outside of Mozilla and outside of the United States.",
+    "section_path": [
+      "History",
+      "2009–2012: Mozilla sponsorship"
+    ],
+    "index": 11
+  },
+  {
+    "type": "heading",
+    "text": "2012–2015: Evolution",
+    "section_path": [
+      "History",
+      "2012–2015: Evolution"
+    ],
+    "index": 12
+  },
+  {
+    "type": "paragraph",
+    "text": "The years from 2012 to 2015 were marked by substantial changes to the Rust type system. Memory management through the ownership system was gradually consolidated and expanded. By 2013, the garbage collector was rarely used, and was removed in favor of the ownership system. Other features were removed in order to simplify the language, including typestates, the pure keyword, various specialized pointer types, and syntax support for channels.",
+    "section_path": [
+      "History",
+      "2012–2015: Evolution"
+    ],
+    "index": 13
+  },
+  {
+    "type": "paragraph",
+    "text": "According to Steve Klabnik, Rust was influenced during this period by developers coming from C++ (e.g., low-level performance of features), scripting languages (e.g., Cargo and package management), and functional programming (e.g., type systems development).",
+    "section_path": [
+      "History",
+      "2012–2015: Evolution"
+    ],
+    "index": 14
+  },
+  {
+    "type": "paragraph",
+    "text": "Graydon Hoare stepped down from Rust in 2013. After Hoare's departure, it evolved organically under a federated governance structure, with a \"core team\" of initially six people, and around 30-40 developers total across various other teams. A Request for Comments (RFC) process for new language features was added in March 2014. The core team would grow to nine people by 2016 with over 1600 RFCs.",
+    "section_path": [
+      "History",
+      "2012–2015: Evolution"
+    ],
+    "index": 15
+  },
+  {
+    "type": "paragraph",
+    "text": "According to Andrew Binstock for Dr. Dobb's Journal in January 2014, while Rust was \"widely viewed as a remarkably elegant language\", adoption slowed because it radically changed from version to version. Rust development at this time focused on finalizing features for version 1.0 so that it could begin promising backward compatibility.",
+    "section_path": [
+      "History",
+      "2012–2015: Evolution"
+    ],
+    "index": 16
+  },
+  {
+    "type": "paragraph",
+    "text": "Six years after Mozilla's sponsorship, Rust 1.0 was published and became the first stable release on May 15, 2015. A year after, the Rust compiler had accumulated over 1,400 contributors and there were over 5,000 third-party libraries published on the Rust package management website Crates.io.",
+    "section_path": [
+      "History",
+      "2012–2015: Evolution"
+    ],
+    "index": 17
+  },
+  {
+    "type": "heading",
+    "text": "2015–2020: Servo and early adoption",
+    "section_path": [
+      "History",
+      "2015–2020: Servo and early adoption"
+    ],
+    "index": 18
+  },
+  {
+    "type": "paragraph",
+    "text": "The development of the Servo browser engine continued in parallel with Rust, jointly funded by Mozilla and Samsung. The teams behind the two projects worked in close collaboration; new features in Rust were tested out by the Servo team, and new features in Servo were used to give feedback back to the Rust team. The first version of Servo was released in 2016. The Firefox web browser shipped with Rust code as of 2016 (version 45), but components of Servo did not appear in Firefox until September 2017 (version 57) as part of the Gecko and Quantum projects.",
+    "section_path": [
+      "History",
+      "2015–2020: Servo and early adoption"
+    ],
+    "index": 19
+  },
+  {
+    "type": "paragraph",
+    "text": "Improvements were made to the Rust toolchain ecosystem during the years following 1.0 including Rustfmt, integrated development environment integration, and a regular compiler testing and release cycle. Rust gained a community code of conduct and an IRC chat for community discussion.",
+    "section_path": [
+      "History",
+      "2015–2020: Servo and early adoption"
+    ],
+    "index": 20
+  },
+  {
+    "type": "paragraph",
+    "text": "The earliest known adoption outside of Mozilla was by individual projects at Samsung, Facebook (now Meta Platforms), Dropbox, and Tilde, Inc., the company behind ember.js. Amazon Web Services followed in 2020. Engineers cited performance, lack of a garbage collector, safety, and pleasantness of working in the language as reasons for the adoption. Amazon developers cited a finding by Portuguese researchers that Rust code used less energy compared to similar code written in Java.",
+    "section_path": [
+      "History",
+      "2015–2020: Servo and early adoption"
+    ],
+    "index": 21
+  },
+  {
+    "type": "heading",
+    "text": "2020–present: Mozilla layoffs and Rust Foundation",
+    "section_path": [
+      "History",
+      "2020–present: Mozilla layoffs and Rust Foundation"
+    ],
+    "index": 22
+  },
+  {
+    "type": "paragraph",
+    "text": "In August 2020, Mozilla laid off 250 of its 1,000 employees worldwide, as part of a corporate restructuring caused by the COVID-19 pandemic. The team behind Servo was disbanded. The event raised concerns about the future of Rust. In the following week, the Rust Core Team acknowledged the severe impact of the layoffs and announced that plans for a Rust foundation were underway. The first goal of the foundation would be to take ownership of all trademarks and domain names and to take financial responsibility for their costs.",
+    "section_path": [
+      "History",
+      "2020–present: Mozilla layoffs and Rust Foundation"
+    ],
+    "index": 23
+  },
+  {
+    "type": "paragraph",
+    "text": "On February 8, 2021, the formation of the Rust Foundation was announced by five founding companies: Amazon Web Services, Google, Huawei, Microsoft, and Mozilla. The foundation would provide financial support for Rust developers in the form of grants and server funding. In a blog post published on April 6, 2021, Google announced support for Rust within the Android Open Source Project as an alternative to C/C++.",
+    "section_path": [
+      "History",
+      "2020–present: Mozilla layoffs and Rust Foundation"
+    ],
+    "index": 24
+  },
+  {
+    "type": "paragraph",
+    "text": "On November 22, 2021, the Moderation Team, which was responsible for enforcing the community code of conduct, announced their resignation \"in protest of the Core Team placing themselves unaccountable to anyone but themselves\". In May 2022, members of the Rust leadership council posted a public response to the incident.",
+    "section_path": [
+      "History",
+      "2020–present: Mozilla layoffs and Rust Foundation"
+    ],
+    "index": 25
+  },
+  {
+    "type": "paragraph",
+    "text": "The Rust Foundation posted a draft for a new trademark policy on April 6, 2023, which resulted in widespread negative reactions from Rust users and contributors. The trademark policy included rules for how the Rust logo and name could be used.",
+    "section_path": [
+      "History",
+      "2020–present: Mozilla layoffs and Rust Foundation"
+    ],
+    "index": 26
+  },
+  {
+    "type": "paragraph",
+    "text": "On February 26, 2024, the U.S. White House Office of the National Cyber Director released a 19-page press report urging software development to move away from C and C++ to memory-safe languages like C#, Go, Java, Ruby, Swift, and Rust.",
+    "section_path": [
+      "History",
+      "2020–present: Mozilla layoffs and Rust Foundation"
+    ],
+    "index": 27
+  },
+  {
+    "type": "heading",
+    "text": "Syntax and features",
+    "section_path": [
+      "Syntax and features"
+    ],
+    "index": 28
+  },
+  {
+    "type": "paragraph",
+    "text": "Rust's syntax is similar to that of C and C++, although many of its features were influenced by functional programming languages such as OCaml. Hoare has described Rust as targeted at frustrated C++ developers.",
+    "section_path": [
+      "Syntax and features"
+    ],
+    "index": 29
+  },
+  {
+    "type": "heading",
+    "text": "Hello World program",
+    "section_path": [
+      "Syntax and features",
+      "Hello World program"
+    ],
+    "index": 30
+  },
+  {
+    "type": "paragraph",
+    "text": "Below is a \"Hello, World!\" program in Rust. The fn keyword denotes a function, and the println! macro (see § Macros) prints the message to standard output. Statements in Rust are separated by semicolons.",
+    "section_path": [
+      "Syntax and features",
+      "Hello World program"
+    ],
+    "index": 31
+  },
+  {
+    "type": "code",
+    "text": "fn main() {\n    println!(\"Hello, World!\");\n}",
+    "section_path": [
+      "Syntax and features",
+      "Hello World program"
+    ],
+    "index": 32
+  },
+  {
+    "type": "heading",
+    "text": "Variables",
+    "section_path": [
+      "Syntax and features",
+      "Variables"
+    ],
+    "index": 33
+  },
+  {
+    "type": "paragraph",
+    "text": "Variables in Rust are defined through the let keyword. The example below assigns a value to the variable with name foo of type i32 and outputs its value; the type annotation : i32 can be omitted.",
+    "section_path": [
+      "Syntax and features",
+      "Variables"
+    ],
+    "index": 34
+  },
+  {
+    "type": "code",
+    "text": "fn main() {\n    let foo: i32 = 10;\n    println!(\"The value of foo is {foo}\");\n}",
+    "section_path": [
+      "Syntax and features",
+      "Variables"
+    ],
+    "index": 35
+  },
+  {
+    "type": "paragraph",
+    "text": "Variables are immutable by default, unless the mut keyword is added. The following example uses //, which denotes the start of a comment.",
+    "section_path": [
+      "Syntax and features",
+      "Variables"
+    ],
+    "index": 36
+  },
+  {
+    "type": "code",
+    "text": "fn main() {\n    // This code would not compile without adding \"mut\".\n    let mut foo = 10; \n    println!(\"The value of foo is {foo}\");\n    foo = 20;\n    println!(\"The value of foo is {foo}\");\n}",
+    "section_path": [
+      "Syntax and features",
+      "Variables"
+    ],
+    "index": 37
+  },
+  {
+    "type": "paragraph",
+    "text": "Multiple let expressions can define multiple variables with the same name, known as variable shadowing. Variable shadowing allows transforming variables without having to name the variables differently. The example below declares a new variable with the same name that is double the original value:",
+    "section_path": [
+      "Syntax and features",
+      "Variables"
+    ],
+    "index": 38
+  },
+  {
+    "type": "code",
+    "text": "fn main() {\n    let foo = 10;\n    // This will output \"The value of foo is 10\"\n    println!(\"The value of foo is {foo}\");\n    let foo = foo * 2;\n    // This will output \"The value of foo is 20\"\n    println!(\"The value of foo is {foo}\");\n}",
+    "section_path": [
+      "Syntax and features",
+      "Variables"
+    ],
+    "index": 39
+  },
+  {
+    "type": "paragraph",
+    "text": "Variable shadowing is also possible for values of different types. For example, going from a string to its length:",
+    "section_path": [
+      "Syntax and features",
+      "Variables"
+    ],
+    "index": 40
+  },
+  {
+    "type": "code",
+    "text": "fn main() {\n    let letters = \"abc\";\n    let letters = letters.len();\n}",
+    "section_path": [
+      "Syntax and features",
+      "Variables"
+    ],
+    "index": 41
+  },
+  {
+    "type": "heading",
+    "text": "Block expressions and control flow",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow"
+    ],
+    "index": 42
+  },
+  {
+    "type": "paragraph",
+    "text": "A block expression is delimited by curly brackets. When the last expression inside a block does not end with a semicolon, the block evaluates to the value of that trailing expression:",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow"
+    ],
+    "index": 43
+  },
+  {
+    "type": "code",
+    "text": "fn main() {\n    let x = {\n        println!(\"this is inside the block\");\n        1 + 2\n    };\n    println!(\"1 + 2 = {x}\");\n}",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow"
+    ],
+    "index": 44
+  },
+  {
+    "type": "paragraph",
+    "text": "Trailing expressions of function bodies are used as the return value:",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow"
+    ],
+    "index": 45
+  },
+  {
+    "type": "code",
+    "text": "fn add_two(x: i32) -> i32 {\n    x + 2\n}",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow"
+    ],
+    "index": 46
+  },
+  {
+    "type": "heading",
+    "text": "if expressions",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow",
+      "if expressions"
+    ],
+    "index": 47
+  },
+  {
+    "type": "paragraph",
+    "text": "An if conditional expression executes code based on whether the given value is true. else can be used for when the value evaluates to false, and else if can be used for combining multiple expressions.",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow",
+      "if expressions"
+    ],
+    "index": 48
+  },
+  {
+    "type": "code",
+    "text": "fn main() {\n    let x = 10;\n    if x > 5 {\n        println!(\"value is greater than five\");\n    }\n\n    if x % 7 == 0 {\n        println!(\"value is divisible by 7\");\n    } else if x % 5 == 0 {\n        println!(\"value is divisible by 5\");\n    } else {\n        println!(\"value is not divisible by 7 or 5\");\n    }\n}",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow",
+      "if expressions"
+    ],
+    "index": 49
+  },
+  {
+    "type": "paragraph",
+    "text": "if and else blocks can evaluate to a value, which can then be assigned to a variable:",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow",
+      "if expressions"
+    ],
+    "index": 50
+  },
+  {
+    "type": "code",
+    "text": "fn main() {\n    let x = 10;\n    let new_x = if x % 2 == 0 { x / 2 } else { 3 * x + 1 };\n    println!(\"{new_x}\");\n}",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow",
+      "if expressions"
+    ],
+    "index": 51
+  },
+  {
+    "type": "heading",
+    "text": "while loops",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow",
+      "while loops"
+    ],
+    "index": 52
+  },
+  {
+    "type": "paragraph",
+    "text": "while can be used to repeat a block of code while a condition is met.",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow",
+      "while loops"
+    ],
+    "index": 53
+  },
+  {
+    "type": "code",
+    "text": "fn main() {\n    // Iterate over all integers from 4 to 10\n    let mut value = 4;\n    while value <= 10 {\n         println!(\"value = {value}\");\n         value += 1;\n    }\n}",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow",
+      "while loops"
+    ],
+    "index": 54
+  },
+  {
+    "type": "heading",
+    "text": "for loops and iterators",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow",
+      "for loops and iterators"
+    ],
+    "index": 55
+  },
+  {
+    "type": "paragraph",
+    "text": "For loops in Rust loop over elements of a collection. for expressions work over any iterator type.",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow",
+      "for loops and iterators"
+    ],
+    "index": 56
+  },
+  {
+    "type": "code",
+    "text": "fn main() {\n    // Using `for` with range syntax for the same functionality as above\n    // The syntax 4..=10 means the range from 4 to 10, up to and including 10.\n    for value in 4..=10 {\n        println!(\"value = {value}\");\n    }\n}",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow",
+      "for loops and iterators"
+    ],
+    "index": 57
+  },
+  {
+    "type": "paragraph",
+    "text": "In the above code, 4..=10 is a value of type Range which implements the Iterator trait. The code within the curly braces is applied to each element returned by the iterator.",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow",
+      "for loops and iterators"
+    ],
+    "index": 58
+  },
+  {
+    "type": "paragraph",
+    "text": "Iterators can be combined with functions over iterators like map, filter, and sum. For example, the following adds up all numbers between 1 and 100 that are multiples of 3:",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow",
+      "for loops and iterators"
+    ],
+    "index": 59
+  },
+  {
+    "type": "code",
+    "text": "(1..=100).filter(|x| x % 3 == 0).sum()",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow",
+      "for loops and iterators"
+    ],
+    "index": 60
+  },
+  {
+    "type": "heading",
+    "text": "loop and break statements",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow",
+      "loop and break statements"
+    ],
+    "index": 61
+  },
+  {
+    "type": "paragraph",
+    "text": "More generally, the loop keyword allows repeating a portion of code until a break occurs. break may optionally exit the loop with a value. In the case of nested loops, labels denoted by 'label_name can be used to break an outer loop rather than the innermost loop.",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow",
+      "loop and break statements"
+    ],
+    "index": 62
+  },
+  {
+    "type": "code",
+    "text": "fn main() {\n    let value = 456;\n    let mut x = 1;\n    let y = loop {\n        x *= 10;\n        if x > value {\n            break x / 10;\n        }\n    };\n    println!(\"largest power of ten that is smaller than or equal to value: {y}\");\n\n    let mut up = 1;\n    'outer: loop {\n        let mut down = 120;\n        loop {\n            if up > 100 {\n                break 'outer;\n            }\n\n            if down < 4 {\n                break;\n            }\n\n            down /= 2;\n            up += 1;\n            println!(\"up: {up}, down: {down}\");\n        }\n        up *= 2;\n    }\n}",
+    "section_path": [
+      "Syntax and features",
+      "Block expressions and control flow",
+      "loop and break statements"
+    ],
+    "index": 63
+  },
+  {
+    "type": "heading",
+    "text": "Pattern matching",
+    "section_path": [
+      "Syntax and features",
+      "Pattern matching"
+    ],
+    "index": 64
+  },
+  {
+    "type": "paragraph",
+    "text": "The match and if let expressions can be used for pattern matching. For example, match can be used to double an optional integer value if present, and return zero otherwise:",
+    "section_path": [
+      "Syntax and features",
+      "Pattern matching"
+    ],
+    "index": 65
+  },
+  {
+    "type": "code",
+    "text": "fn double(x: Option<u64>) -> u64 {\n    match x {\n        Some(y) => y * 2,\n        None => 0,\n    }\n}",
+    "section_path": [
+      "Syntax and features",
+      "Pattern matching"
+    ],
+    "index": 66
+  },
+  {
+    "type": "paragraph",
+    "text": "Equivalently, this can be written with if let and else:",
+    "section_path": [
+      "Syntax and features",
+      "Pattern matching"
+    ],
+    "index": 67
+  },
+  {
+    "type": "code",
+    "text": "fn double(x: Option<u64>) -> u64 {\n    if let Some(y) = x {\n        y * 2\n    } else {\n        0\n    }\n}",
+    "section_path": [
+      "Syntax and features",
+      "Pattern matching"
+    ],
+    "index": 68
+  },
+  {
+    "type": "heading",
+    "text": "Types",
+    "section_path": [
+      "Syntax and features",
+      "Types"
+    ],
+    "index": 69
+  },
+  {
+    "type": "paragraph",
+    "text": "Rust is strongly typed and statically typed, meaning that the types of all variables must be known at compilation time. Assigning a value of a particular type to a differently typed variable causes a compilation error. Type inference is used to determine the type of variables if unspecified.",
+    "section_path": [
+      "Syntax and features",
+      "Types"
+    ],
+    "index": 70
+  },
+  {
+    "type": "paragraph",
+    "text": "The type (), called the \"unit type\" in Rust, is a concrete type that has exactly one value. It occupies no memory (as it represents the absence of value). All functions that do not have an indicated return type implicitly return (). It is similar to void in other C-style languages, however void denotes the absence of a type and cannot have any value.",
+    "section_path": [
+      "Syntax and features",
+      "Types"
+    ],
+    "index": 71
+  },
+  {
+    "type": "paragraph",
+    "text": "The default integer type is i32, and the default floating point type is f64. If the type of a literal number is not explicitly provided, it is either inferred from the context or the default type is used.",
+    "section_path": [
+      "Syntax and features",
+      "Types"
+    ],
+    "index": 72
+  },
+  {
+    "type": "heading",
+    "text": "Primitive types",
+    "section_path": [
+      "Syntax and features",
+      "Types",
+      "Primitive types"
+    ],
+    "index": 73
+  },
+  {
+    "type": "paragraph",
+    "text": "Integer types in Rust are named based on the signedness and the number of bits the type takes. For example, i32 is a signed integer that takes 32 bits of storage, whereas u8 is unsigned and only takes 8 bits of storage. isize and usize take storage depending on the memory address bus width of the compilation target. For example, when building for 32-bit targets, both types will take up 32 bits of space.",
+    "section_path": [
+      "Syntax and features",
+      "Types",
+      "Primitive types"
+    ],
+    "index": 74
+  },
+  {
+    "type": "paragraph",
+    "text": "By default, integer literals are in base-10, but different radices are supported with prefixes, for example, 0b11 for binary numbers, 0o567 for octals, and 0xDB for hexadecimals. By default, integer literals default to i32 as its type. Suffixes such as 4u32 can be used to explicitly set the type of a literal. Byte literals such as b'X' are available to represent the ASCII value (as a u8) of a specific character.",
+    "section_path": [
+      "Syntax and features",
+      "Types",
+      "Primitive types"
+    ],
+    "index": 75
+  },
+  {
+    "type": "paragraph",
+    "text": "The Boolean type is referred to as bool which can take a value of either true or false. A char takes up 32 bits of space and represents a Unicode scalar value: a Unicode codepoint that is not a surrogate. IEEE 754 floating point numbers are supported with f32 for single precision floats and f64 for double precision floats.",
+    "section_path": [
+      "Syntax and features",
+      "Types",
+      "Primitive types"
+    ],
+    "index": 76
+  },
+  {
+    "type": "heading",
+    "text": "Compound types",
+    "section_path": [
+      "Syntax and features",
+      "Types",
+      "Compound types"
+    ],
+    "index": 77
+  },
+  {
+    "type": "paragraph",
+    "text": "Compound types can contain multiple values. Tuples are fixed-size lists that can contain values whose types can be different. Arrays are fixed-size lists whose values are of the same type. Expressions of the tuple and array types can be written through listing the values, and can be accessed with .index or [index]:",
+    "section_path": [
+      "Syntax and features",
+      "Types",
+      "Compound types"
+    ],
+    "index": 78
+  },
+  {
+    "type": "code",
+    "text": "let tuple: (u32, bool) = (3, true);\nlet array: [i8; 5] = [1, 2, 3, 4, 5];\nlet value = tuple.1; // true\nlet value = array[2]; // 3",
+    "section_path": [
+      "Syntax and features",
+      "Types",
+      "Compound types"
+    ],
+    "index": 79
+  },
+  {
+    "type": "paragraph",
+    "text": "Arrays can also be constructed through copying a single value a number of times:",
+    "section_path": [
+      "Syntax and features",
+      "Types",
+      "Compound types"
+    ],
+    "index": 80
+  },
+  {
+    "type": "code",
+    "text": "let array2: [char; 10] = [' '; 10];",
+    "section_path": [
+      "Syntax and features",
+      "Types",
+      "Compound types"
+    ],
+    "index": 81
+  },
+  {
+    "type": "heading",
+    "text": "Ownership and references",
+    "section_path": [
+      "Syntax and features",
+      "Ownership and references"
+    ],
+    "index": 82
+  },
+  {
+    "type": "paragraph",
+    "text": "Rust's ownership system consists of rules that ensure memory safety without using a garbage collector. At compile time, each value must be attached to a variable called the owner of that value, and every value must have exactly one owner. Values are moved between different owners through assignment or passing a value as a function parameter. Values can also be borrowed, meaning they are temporarily passed to a different function before being returned to the owner. With these rules, Rust can prevent the creation and use of dangling pointers:",
+    "section_path": [
+      "Syntax and features",
+      "Ownership and references"
+    ],
+    "index": 83
+  },
+  {
+    "type": "code",
+    "text": "fn print_string(s: String) {\n    println!(\"{}\", s);\n}\n\nfn main() {\n    let s = String::from(\"Hello, World\");\n    print_string(s); // s consumed by print_string\n    // s has been moved, so cannot be used any more\n    // another print_string(s); would result in a compile error\n}",
+    "section_path": [
+      "Syntax and features",
+      "Ownership and references"
+    ],
+    "index": 84
+  },
+  {
+    "type": "paragraph",
+    "text": "The function print_string takes ownership over the String value passed in; Alternatively, & can be used to indicate a reference type (in &String) and to create a reference (in &s):",
+    "section_path": [
+      "Syntax and features",
+      "Ownership and references"
+    ],
+    "index": 85
+  },
+  {
+    "type": "code",
+    "text": "fn print_string(s: &String) {\n    println!(\"{}\", s);\n}\n\nfn main() {\n    let s = String::from(\"Hello, World\");\n    print_string(&s); // s borrowed by print_string\n    print_string(&s); // s has not been consumed; we can call the function many times\n}",
+    "section_path": [
+      "Syntax and features",
+      "Ownership and references"
+    ],
+    "index": 86
+  },
+  {
+    "type": "paragraph",
+    "text": "Because of these ownership rules, Rust types are known as affine types, meaning each value may be used at most once. This enforces a form of software fault isolation as the owner of a value is solely responsible for its correctness and deallocation.",
+    "section_path": [
+      "Syntax and features",
+      "Ownership and references"
+    ],
+    "index": 87
+  },
+  {
+    "type": "paragraph",
+    "text": "When a value goes out of scope, it is dropped by running its destructor. The destructor may be programmatically defined through implementing the Drop trait. This helps manage resources such as file handles, network sockets, and locks, since when objects are dropped, the resources associated with them are closed or released automatically.",
+    "section_path": [
+      "Syntax and features",
+      "Ownership and references"
+    ],
+    "index": 88
+  },
+  {
+    "type": "heading",
+    "text": "Lifetimes",
+    "section_path": [
+      "Syntax and features",
+      "Ownership and references",
+      "Lifetimes"
+    ],
+    "index": 89
+  },
+  {
+    "type": "paragraph",
+    "text": "Object lifetime refers to the period of time during which a reference is valid; that is, the time between the object creation and destruction. These lifetimes are implicitly associated with all Rust reference types. While often inferred, they can also be indicated explicitly with named lifetime parameters (often denoted 'a, 'b, and so on).",
+    "section_path": [
+      "Syntax and features",
+      "Ownership and references",
+      "Lifetimes"
+    ],
+    "index": 90
+  },
+  {
+    "type": "paragraph",
+    "text": "A value's lifetime in Rust can be thought of as lexically scoped, meaning that the duration of an object lifetime is inferred from the set of locations in the source code (i.e., function, line, and column numbers) for which a variable is valid. For example, a reference to a local variable has a lifetime from the expression it is declared in up until the last use of it.",
+    "section_path": [
+      "Syntax and features",
+      "Ownership and references",
+      "Lifetimes"
+    ],
+    "index": 91
+  },
+  {
+    "type": "code",
+    "text": "fn main() {\n    let mut x = 5;            // ------------------+- Lifetime 'a\n                              //                   |\n    let r = &x;               // -+-- Lifetime 'b  |\n                              //  |                |\n    println!(\"r: {}\", r);     // -+                |\n    // Since r is no longer used,                  |\n    // its lifetime ends                           |\n    let r2 = &mut x;          // -+-- Lifetime 'c  |\n}                             // ------------------+",
+    "section_path": [
+      "Syntax and features",
+      "Ownership and references",
+      "Lifetimes"
+    ],
+    "index": 92
+  },
+  {
+    "type": "paragraph",
+    "text": "The borrow checker in the Rust compiler then enforces that references are only used in the locations of the source code where the associated lifetime is valid. In the example above, storing a reference to variable x in r is valid, as variable x has a longer lifetime ('a) than variable r ('b). However, when x has a shorter lifetime, the borrow checker would reject the program:",
+    "section_path": [
+      "Syntax and features",
+      "Ownership and references",
+      "Lifetimes"
+    ],
+    "index": 93
+  },
+  {
+    "type": "code",
+    "text": "fn main() {\n    let r;                    // ------------------+- Lifetime 'a\n                              //                   |\n    {                         //                   |\n        let x = 5;            // -+-- Lifetime 'b  |\n        r = &x; // ERROR: x does  |                |\n    }           // not live long -|                |\n                // enough                          |\n    println!(\"r: {}\", r);     //                   |\n}                             // ------------------+",
+    "section_path": [
+      "Syntax and features",
+      "Ownership and references",
+      "Lifetimes"
+    ],
+    "index": 94
+  },
+  {
+    "type": "paragraph",
+    "text": "Since the lifetime of the referenced variable ('b) is shorter than the lifetime of the variable holding the reference ('a), the borrow checker errors, preventing x from being used from outside its scope.",
+    "section_path": [
+      "Syntax and features",
+      "Ownership and references",
+      "Lifetimes"
+    ],
+    "index": 95
+  },
+  {
+    "type": "paragraph",
+    "text": "Lifetimes can be indicated using explicit lifetime parameters on function arguments. For example, the following code specifies that the reference returned by the function has the same lifetime as original (and not necessarily the same lifetime as prefix):",
+    "section_path": [
+      "Syntax and features",
+      "Ownership and references",
+      "Lifetimes"
+    ],
+    "index": 96
+  },
+  {
+    "type": "code",
+    "text": "fn remove_prefix<'a>(mut original: &'a str, prefix: &str) -> &'a str {\n    if original.starts_with(prefix) {\n        original = original[prefix.len()..];\n    }\n    original\n}",
+    "section_path": [
+      "Syntax and features",
+      "Ownership and references",
+      "Lifetimes"
+    ],
+    "index": 97
+  },
+  {
+    "type": "paragraph",
+    "text": "In the compiler, ownership and lifetimes work together to prevent memory safety issues such as dangling pointers.",
+    "section_path": [
+      "Syntax and features",
+      "Ownership and references",
+      "Lifetimes"
+    ],
+    "index": 98
+  },
+  {
+    "type": "heading",
+    "text": "User-defined types",
+    "section_path": [
+      "Syntax and features",
+      "User-defined types"
+    ],
+    "index": 99
+  },
+  {
+    "type": "paragraph",
+    "text": "User-defined types are created with the struct or enum keywords. The struct keyword is used to denote a record type that groups multiple related values. enums can take on different variants at runtime, with its capabilities similar to algebraic data types found in functional programming languages. Both records and enum variants can contain fields with different types. Alternative names, or aliases, for the same type can be defined with the type keyword.",
+    "section_path": [
+      "Syntax and features",
+      "User-defined types"
+    ],
+    "index": 100
+  },
+  {
+    "type": "paragraph",
+    "text": "The impl keyword can define methods for a user-defined type. Data and functions are defined separately. Implementations fulfill a role similar to that of classes within other languages.",
+    "section_path": [
+      "Syntax and features",
+      "User-defined types"
+    ],
+    "index": 101
+  },
+  {
+    "type": "heading",
+    "text": "Standard library",
+    "section_path": [
+      "Syntax and features",
+      "User-defined types",
+      "Standard library"
+    ],
+    "index": 102
+  },
+  {
+    "type": "paragraph",
+    "text": "The Rust standard library defines and implements many widely used custom data types, including core data structures such as Vec, Option, and HashMap, as well as smart pointer types. Rust provides a way to exclude most of the standard library using the attribute #![no_std], for applications such as embedded devices. Internally, the standard library is divided into three parts, core, alloc, and std, where std and alloc are excluded by #![no_std].",
+    "section_path": [
+      "Syntax and features",
+      "User-defined types",
+      "Standard library"
+    ],
+    "index": 103
+  },
+  {
+    "type": "paragraph",
+    "text": "Rust uses the option type Option<T> to define optional values, which can be matched using if let or match to access the inner value:",
+    "section_path": [
+      "Syntax and features",
+      "User-defined types",
+      "Standard library"
+    ],
+    "index": 104
+  },
+  {
+    "type": "code",
+    "text": "fn main() {\n    let name1: Option<&str> = None;\n    // In this case, nothing will be printed out\n    if let Some(name) = name1 {\n        println!(\"{name}\");\n    }\n\n    let name2: Option<&str> = Some(\"Matthew\");\n    // In this case, the word \"Matthew\" will be printed out\n    if let Some(name) = name2 {\n        println!(\"{name}\");\n    }\n}",
+    "section_path": [
+      "Syntax and features",
+      "User-defined types",
+      "Standard library"
+    ],
+    "index": 105
+  },
+  {
+    "type": "paragraph",
+    "text": "Similarly, Rust's result type Result<T, E> holds either a successfully computed value (the Ok variant) or an error (the Err variant). Like Option, the use of Result means that the inner value cannot be used directly; programmers must use a match expression, syntactic sugar such as ? (the “try” operator), or an explicit unwrap assertion to access it. Both Option and Result are used throughout the standard library and are a fundamental part of Rust's explicit approach to handling errors and missing data.",
+    "section_path": [
+      "Syntax and features",
+      "User-defined types",
+      "Standard library"
+    ],
+    "index": 106
+  },
+  {
+    "type": "heading",
+    "text": "Pointers",
+    "section_path": [
+      "Syntax and features",
+      "Pointers"
+    ],
+    "index": 107
+  },
+  {
+    "type": "paragraph",
+    "text": "The & and &mut reference types are guaranteed to not be null and point to valid memory. The raw pointer types *const and *mut opt out of the safety guarantees, thus they may be null or invalid; however, it is impossible to dereference them unless the code is explicitly declared unsafe through the use of an unsafe block. Unlike dereferencing, the creation of raw pointers is allowed inside safe Rust code.",
+    "section_path": [
+      "Syntax and features",
+      "Pointers"
+    ],
+    "index": 108
+  },
+  {
+    "type": "heading",
+    "text": "Type conversion",
+    "section_path": [
+      "Syntax and features",
+      "Type conversion"
+    ],
+    "index": 109
+  },
+  {
+    "type": "paragraph",
+    "text": "Rust provides no implicit type conversion (coercion) between most primitive types. But, explicit type conversion (casting) can be performed using the as keyword.",
+    "section_path": [
+      "Syntax and features",
+      "Type conversion"
+    ],
+    "index": 110
+  },
+  {
+    "type": "code",
+    "text": "let x: i32 = 1000;\nprintln!(\"1000 as a u16 is: {}\", x as u16);",
+    "section_path": [
+      "Syntax and features",
+      "Type conversion"
+    ],
+    "index": 111
+  },
+  {
+    "type": "heading",
+    "text": "Polymorphism",
+    "section_path": [
+      "Syntax and features",
+      "Polymorphism"
+    ],
+    "index": 112
+  },
+  {
+    "type": "paragraph",
+    "text": "Rust supports polymorphism through traits, generic functions, and trait objects.",
+    "section_path": [
+      "Syntax and features",
+      "Polymorphism"
+    ],
+    "index": 113
+  },
+  {
+    "type": "heading",
+    "text": "Traits",
+    "section_path": [
+      "Syntax and features",
+      "Polymorphism",
+      "Traits"
+    ],
+    "index": 114
+  },
+  {
+    "type": "paragraph",
+    "text": "Common behavior between types is declared using traits and impl blocks:",
+    "section_path": [
+      "Syntax and features",
+      "Polymorphism",
+      "Traits"
+    ],
+    "index": 115
+  },
+  {
+    "type": "code",
+    "text": "trait Zero: Sized {\n    fn zero() -> Self;\n    fn is_zero(&self) -> bool\n    where\n        Self: PartialEq,\n    {\n        self == &Zero::zero()\n    }\n}\n\nimpl Zero for u32 {\n    fn zero() -> u32 { 0 }\n}\n\nimpl Zero for f32 {\n    fn zero() -> Self { 0.0 }\n}",
+    "section_path": [
+      "Syntax and features",
+      "Polymorphism",
+      "Traits"
+    ],
+    "index": 116
+  },
+  {
+    "type": "paragraph",
+    "text": "The example above includes a method is_zero which provides a default implementation that may be overridden when implementing the trait.",
+    "section_path": [
+      "Syntax and features",
+      "Polymorphism",
+      "Traits"
+    ],
+    "index": 117
+  },
+  {
+    "type": "heading",
+    "text": "Generic functions",
+    "section_path": [
+      "Syntax and features",
+      "Polymorphism",
+      "Generic functions"
+    ],
+    "index": 118
+  },
+  {
+    "type": "paragraph",
+    "text": "A function can be made generic by adding type parameters inside angle brackets (<Num>), which only allow types that implement the trait:",
+    "section_path": [
+      "Syntax and features",
+      "Polymorphism",
+      "Generic functions"
+    ],
+    "index": 119
+  },
+  {
+    "type": "code",
+    "text": "// zero is a generic function with one type parameter, Num\nfn zero<Num: Zero>() -> Num {\n    Num::zero()\n}\n\nfn main() {\n    let a: u32 = zero();\n    let b: f32 = zero();\n    assert!(a.is_zero() && b.is_zero());\n}",
+    "section_path": [
+      "Syntax and features",
+      "Polymorphism",
+      "Generic functions"
+    ],
+    "index": 120
+  },
+  {
+    "type": "paragraph",
+    "text": "In the examples above, Num: Zero as well as where Self: PartialEq are trait bounds that constrain the type to only allow types that implement Zero or PartialEq. Within a trait or impl, Self refers to the type that the code is implementing.",
+    "section_path": [
+      "Syntax and features",
+      "Polymorphism",
+      "Generic functions"
+    ],
+    "index": 121
+  },
+  {
+    "type": "paragraph",
+    "text": "Generics can be used in functions to allow implementing a behavior for different types without repeating the same code (see bounded parametric polymorphism). Generic functions can be written in relation to other generics, without knowing the actual type.",
+    "section_path": [
+      "Syntax and features",
+      "Polymorphism",
+      "Generic functions"
+    ],
+    "index": 122
+  },
+  {
+    "type": "heading",
+    "text": "Trait objects",
+    "section_path": [
+      "Syntax and features",
+      "Polymorphism",
+      "Trait objects"
+    ],
+    "index": 123
+  },
+  {
+    "type": "paragraph",
+    "text": "By default, traits use static dispatch: the compiler monomorphizes the function for each concrete type instance, yielding performance equivalent to type-specific code at the cost of longer compile times and larger binaries.",
+    "section_path": [
+      "Syntax and features",
+      "Polymorphism",
+      "Trait objects"
+    ],
+    "index": 124
+  },
+  {
+    "type": "paragraph",
+    "text": "When the exact type is not known at compile time, Rust provides trait objects &dyn Trait and Box<dyn Trait>. Trait object calls use dynamic dispatch via a lookup table; a trait object is a \"fat pointer\" carrying both a data pointer and a method table pointer. This indirection adds a small runtime cost, but it keeps a single copy of the code and reduces binary size. Only \"object-safe\" traits are eligible to be used as trait objects.",
+    "section_path": [
+      "Syntax and features",
+      "Polymorphism",
+      "Trait objects"
+    ],
+    "index": 125
+  },
+  {
+    "type": "paragraph",
+    "text": "This approach is similar to duck typing, where all data types that implement a given trait can be treated as functionally interchangeable. The following example creates a list of objects where each object implements the Display trait:",
+    "section_path": [
+      "Syntax and features",
+      "Polymorphism",
+      "Trait objects"
+    ],
+    "index": 126
+  },
+  {
+    "type": "code",
+    "text": "use std::fmt::Display;\n\nlet v: Vec<Box<dyn Display>> = vec![\n    Box::new(3),\n    Box::new(5.0),\n    Box::new(\"hi\"),\n];\n\nfor x in v {\n    println!(\"{x}\");\n}",
+    "section_path": [
+      "Syntax and features",
+      "Polymorphism",
+      "Trait objects"
+    ],
+    "index": 127
+  },
+  {
+    "type": "paragraph",
+    "text": "If an element in the list does not implement the Display trait, it will cause a compile-time error.",
+    "section_path": [
+      "Syntax and features",
+      "Polymorphism",
+      "Trait objects"
+    ],
+    "index": 128
+  },
+  {
+    "type": "heading",
+    "text": "Memory management",
+    "section_path": [
+      "Syntax and features",
+      "Memory management"
+    ],
+    "index": 129
+  },
+  {
+    "type": "paragraph",
+    "text": "Rust does not use garbage collection. Memory and other resources are instead managed through the \"resource acquisition is initialization\" convention, with optional reference counting. Rust provides deterministic management of resources, with very low overhead. Values are allocated on the stack by default, and all dynamic allocations must be explicit.",
+    "section_path": [
+      "Syntax and features",
+      "Memory management"
+    ],
+    "index": 130
+  },
+  {
+    "type": "paragraph",
+    "text": "The built-in reference types using the & symbol do not involve run-time reference counting. The safety and validity of the underlying pointers is verified at compile time, preventing dangling pointers and other forms of undefined behavior. Rust's type system separates shared, immutable references of the form &T from unique, mutable references of the form &mut T. A mutable reference can be coerced to an immutable reference, but not vice versa.",
+    "section_path": [
+      "Syntax and features",
+      "Memory management"
+    ],
+    "index": 131
+  },
+  {
+    "type": "heading",
+    "text": "Unsafe",
+    "section_path": [
+      "Syntax and features",
+      "Unsafe"
+    ],
+    "index": 132
+  },
+  {
+    "type": "paragraph",
+    "text": "Rust's memory safety checks (See #Safety) may be circumvented through the use of unsafe blocks. This allows programmers to dereference arbitrary raw pointers, call external code, or perform other low-level functionality not allowed by safe Rust. Some low-level functionality enabled in this way includes volatile memory access, architecture-specific intrinsics, type punning, and inline assembly.",
+    "section_path": [
+      "Syntax and features",
+      "Unsafe"
+    ],
+    "index": 133
+  },
+  {
+    "type": "paragraph",
+    "text": "Unsafe code is sometimes needed to implement complex data structures. A frequently cited example is that it is difficult or impossible to implement doubly linked lists in safe Rust.",
+    "section_path": [
+      "Syntax and features",
+      "Unsafe"
+    ],
+    "index": 134
+  },
+  {
+    "type": "paragraph",
+    "text": "Programmers using unsafe Rust are considered responsible for upholding Rust's memory and type safety requirements, for example, that no two mutable references exist pointing to the same location. If programmers write code which violates these requirements, this results in undefined behavior. The Rust documentation includes a list of behavior considered undefined, including accessing dangling or misaligned pointers, or breaking the aliasing rules for references.",
+    "section_path": [
+      "Syntax and features",
+      "Unsafe"
+    ],
+    "index": 135
+  },
+  {
+    "type": "heading",
+    "text": "Macros",
+    "section_path": [
+      "Syntax and features",
+      "Macros"
+    ],
+    "index": 136
+  },
+  {
+    "type": "paragraph",
+    "text": "Macros allow generation and transformation of Rust code to reduce repetition. Macros come in two forms, with declarative macros defined through macro_rules!, and procedural macros, which are defined in separate crates.",
+    "section_path": [
+      "Syntax and features",
+      "Macros"
+    ],
+    "index": 137
+  },
+  {
+    "type": "heading",
+    "text": "Declarative macros",
+    "section_path": [
+      "Syntax and features",
+      "Macros",
+      "Declarative macros"
+    ],
+    "index": 138
+  },
+  {
+    "type": "paragraph",
+    "text": "A declarative macro (also called a \"macro by example\") is a macro, defined using the macro_rules! keyword, that uses pattern matching to determine its expansion. Below is an example that sums over all its arguments:",
+    "section_path": [
+      "Syntax and features",
+      "Macros",
+      "Declarative macros"
+    ],
+    "index": 139
+  },
+  {
+    "type": "code",
+    "text": "macro_rules! sum {\n    ( $initial:expr $(, $expr:expr )* $(,)? ) => {\n        $initial $(+ $expr)*\n    }\n}\n\nfn main() {\n    let x = sum!(1, 2, 3);\n    println!(\"{x}\"); // prints 6\n}",
+    "section_path": [
+      "Syntax and features",
+      "Macros",
+      "Declarative macros"
+    ],
+    "index": 140
+  },
+  {
+    "type": "paragraph",
+    "text": "In this example, the macro named sum is defined using the form macro_rules! sum { (...) => { ... } }. The first part inside the parentheses of the definition, the macro pattern ( $initial:expr $(, $expr:expr )* $(,)? ) specifies the structure of input it can take. Here, $initial:expr represents the first expression, while $(, $expr:expr )* means there can be zero or more additional comma-separated expressions after it. The trailing $(,)? allows the caller to optionally include a final comma without causing an error. The second part after the arrow => describes what code will be generated when the macro is invoked. In this case, $initial $(+ $expr)* means that the generated code will start with the first expression, followed by a + and each of the additional expressions in sequence. The * again means \"repeat this pattern zero or more times\". This means, when the macro is later called in line 8, as sum!(1, 2, 3) the macro will resolve to 1 + 2 + 3 representing the addition of all of the passed expressions.",
+    "section_path": [
+      "Syntax and features",
+      "Macros",
+      "Declarative macros"
+    ],
+    "index": 141
+  },
+  {
+    "type": "heading",
+    "text": "Procedural macros",
+    "section_path": [
+      "Syntax and features",
+      "Macros",
+      "Procedural macros"
+    ],
+    "index": 142
+  },
+  {
+    "type": "paragraph",
+    "text": "Procedural macros are Rust functions that run and modify the compiler's input token stream, before any other components are compiled. They are generally more flexible than declarative macros, but are more difficult to maintain due to their complexity.",
+    "section_path": [
+      "Syntax and features",
+      "Macros",
+      "Procedural macros"
+    ],
+    "index": 143
+  },
+  {
+    "type": "paragraph",
+    "text": "Procedural macros come in three flavors:",
+    "section_path": [
+      "Syntax and features",
+      "Macros",
+      "Procedural macros"
+    ],
+    "index": 144
+  },
+  {
+    "type": "list_item",
+    "text": "Function-like macros custom!(...)",
+    "section_path": [
+      "Syntax and features",
+      "Macros",
+      "Procedural macros"
+    ],
+    "index": 145
+  },
+  {
+    "type": "list_item",
+    "text": "Derive macros #[derive(CustomDerive)]",
+    "section_path": [
+      "Syntax and features",
+      "Macros",
+      "Procedural macros"
+    ],
+    "index": 146
+  },
+  {
+    "type": "list_item",
+    "text": "Attribute macros #[custom_attribute]",
+    "section_path": [
+      "Syntax and features",
+      "Macros",
+      "Procedural macros"
+    ],
+    "index": 147
+  },
+  {
+    "type": "heading",
+    "text": "Interface with C and C++",
+    "section_path": [
+      "Syntax and features",
+      "Interface with C and C++"
+    ],
+    "index": 148
+  },
+  {
+    "type": "paragraph",
+    "text": "Rust supports the creation of foreign function interfaces (FFI) through the extern keyword. A function that uses the C calling convention can be written using extern \"C\" fn. Symbols can be exported from Rust to other languages through the #[unsafe(no_mangle)] attribute, and symbols can be imported into Rust through extern blocks:",
+    "section_path": [
+      "Syntax and features",
+      "Interface with C and C++"
+    ],
+    "index": 149
+  },
+  {
+    "type": "code",
+    "text": "#[unsafe(no_mangle)]\npub extern \"C\" fn exported_from_rust(x: i32) -> i32 { x + 1 }\nunsafe extern \"C\" {\n    fn imported_into_rust(x: i32) -> i32;\n}",
+    "section_path": [
+      "Syntax and features",
+      "Interface with C and C++"
+    ],
+    "index": 150
+  },
+  {
+    "type": "paragraph",
+    "text": "The #[repr(C)] attribute enables deterministic memory layouts for structs and enums for use across FFI boundaries. External libraries such as bindgen and cxx can generate Rust bindings for C/C++.",
+    "section_path": [
+      "Syntax and features",
+      "Interface with C and C++"
+    ],
+    "index": 151
+  },
+  {
+    "type": "heading",
+    "text": "Safety",
+    "section_path": [
+      "Safety"
+    ],
+    "index": 152
+  },
+  {
+    "type": "paragraph",
+    "text": "Safety properties guaranteed by Rust include memory safety, type safety, and data race freedom. As described above, these guarantees can be circumvented by using the unsafe keyword.",
+    "section_path": [
+      "Safety"
+    ],
+    "index": 153
+  },
+  {
+    "type": "paragraph",
+    "text": "Memory safety includes the absence of dereferences to null, dangling, and misaligned pointers, and the absence of buffer overflows and double free errors.",
+    "section_path": [
+      "Safety"
+    ],
+    "index": 154
+  },
+  {
+    "type": "paragraph",
+    "text": "Memory leaks are possible in safe Rust. Memory leaks may occur as a result of creating reference counted pointers that point at each other (a reference cycle) or can be deliberately created through calling Box::leak.",
+    "section_path": [
+      "Safety"
+    ],
+    "index": 155
+  },
+  {
+    "type": "heading",
+    "text": "Ecosystem",
+    "section_path": [
+      "Ecosystem"
+    ],
+    "index": 156
+  },
+  {
+    "type": "paragraph",
+    "text": "The Rust ecosystem includes its compiler, its standard library, and additional components for software development. Component installation is typically managed by rustup, a Rust toolchain installer developed by the Rust project.",
+    "section_path": [
+      "Ecosystem"
+    ],
+    "index": 157
+  },
+  {
+    "type": "heading",
+    "text": "Compiler",
+    "section_path": [
+      "Ecosystem",
+      "Compiler"
+    ],
+    "index": 158
+  },
+  {
+    "type": "paragraph",
+    "text": "The Rust compiler, rustc, compiles Rust code into binaries. First, the compiler parses the source code into an AST. Next, this AST is lowered to IR. The compiler backend is then invoked as a subcomponent to apply optimizations and translate the resulting IR into object code. Finally, a linker is used to combine the object(s) into a single executable image.",
+    "section_path": [
+      "Ecosystem",
+      "Compiler"
+    ],
+    "index": 159
+  },
+  {
+    "type": "paragraph",
+    "text": "rustc uses LLVM as its compiler backend by default, but it also supports using alternative backends such as GCC and Cranelift. The intention of those alternative backends is to increase platform coverage of Rust or to improve compilation times.",
+    "section_path": [
+      "Ecosystem",
+      "Compiler"
+    ],
+    "index": 160
+  },
+  {
+    "type": "heading",
+    "text": "Cargo",
+    "section_path": [
+      "Ecosystem",
+      "Cargo"
+    ],
+    "index": 161
+  },
+  {
+    "type": "paragraph",
+    "text": "Cargo is Rust's build system and package manager. It downloads, compiles, distributes, and uploads packages—called crates—that are maintained in an official registry. It also acts as a front-end for Clippy and other Rust components.",
+    "section_path": [
+      "Ecosystem",
+      "Cargo"
+    ],
+    "index": 162
+  },
+  {
+    "type": "paragraph",
+    "text": "By default, Cargo sources its dependencies from the user-contributed registry crates.io, but Git repositories, crates in the local filesystem, and other external sources can also be specified as dependencies.",
+    "section_path": [
+      "Ecosystem",
+      "Cargo"
+    ],
+    "index": 163
+  },
+  {
+    "type": "heading",
+    "text": "Rustfmt",
+    "section_path": [
+      "Ecosystem",
+      "Rustfmt"
+    ],
+    "index": 164
+  },
+  {
+    "type": "paragraph",
+    "text": "Rustfmt is a code formatter for Rust. It formats whitespace and indentation to produce code in accordance with a common style, unless otherwise specified. It can be invoked as a standalone program, or from a Rust project through Cargo.",
+    "section_path": [
+      "Ecosystem",
+      "Rustfmt"
+    ],
+    "index": 165
+  },
+  {
+    "type": "heading",
+    "text": "Clippy",
+    "section_path": [
+      "Ecosystem",
+      "Clippy"
+    ],
+    "index": 166
+  },
+  {
+    "type": "paragraph",
+    "text": "Clippy is Rust's built-in linting tool to improve the correctness, performance, and readability of Rust code. As of 2025, it has 795 rules.",
+    "section_path": [
+      "Ecosystem",
+      "Clippy"
+    ],
+    "index": 167
+  },
+  {
+    "type": "heading",
+    "text": "Versioning system",
+    "section_path": [
+      "Ecosystem",
+      "Versioning system"
+    ],
+    "index": 168
+  },
+  {
+    "type": "paragraph",
+    "text": "Following Rust 1.0, new features are developed in nightly versions which are released daily. During each six-week release cycle, changes to nightly versions are released to beta, while changes from the previous beta version are released to a new stable version.",
+    "section_path": [
+      "Ecosystem",
+      "Versioning system"
+    ],
+    "index": 169
+  },
+  {
+    "type": "paragraph",
+    "text": "Every two or three years, a new \"edition\" is produced. Editions are released to allow making limited breaking changes, such as promoting await to a keyword to support async/await features. Crates targeting different editions can interoperate with each other, so a crate can upgrade to a new edition even if its callers or its dependencies still target older editions. Migration to a new edition can be assisted with automated tooling.",
+    "section_path": [
+      "Ecosystem",
+      "Versioning system"
+    ],
+    "index": 170
+  },
+  {
+    "type": "heading",
+    "text": "IDE support",
+    "section_path": [
+      "Ecosystem",
+      "IDE support"
+    ],
+    "index": 171
+  },
+  {
+    "type": "paragraph",
+    "text": "rust-analyzer is a set of utilities that provides integrated development environments (IDEs) and text editors with information about a Rust project through the Language Server Protocol. This enables features including autocomplete, and compilation error display, while editing code.",
+    "section_path": [
+      "Ecosystem",
+      "IDE support"
+    ],
+    "index": 172
+  },
+  {
+    "type": "heading",
+    "text": "Performance",
+    "section_path": [
+      "Performance"
+    ],
+    "index": 173
+  },
+  {
+    "type": "paragraph",
+    "text": "Since it performs no garbage collection, Rust is often faster than other memory-safe languages. Most of Rust's memory safety guarantees impose no runtime overhead, with the exception of array indexing which is checked at runtime by default. The performance impact of array indexing bounds checks varies, but can be significant in some cases.",
+    "section_path": [
+      "Performance"
+    ],
+    "index": 174
+  },
+  {
+    "type": "paragraph",
+    "text": "Many of Rust's features are so-called zero-cost abstractions, meaning they are optimized away at compile time and incur no runtime penalty. The ownership and borrowing system permits zero-copy implementations for some performance-sensitive tasks, such as parsing. Static dispatch is used by default to eliminate method calls, except for methods called on dynamic trait objects. The compiler uses inline expansion to eliminate function calls and statically-dispatched method invocations.",
+    "section_path": [
+      "Performance"
+    ],
+    "index": 175
+  },
+  {
+    "type": "paragraph",
+    "text": "Since Rust uses LLVM, all performance improvements in LLVM apply to Rust also. Unlike C and C++, Rust allows the compiler to reorder struct and enum elements unless a #[repr(C)] representation attribute is applied. This allows the compiler to optimize for memory footprint, alignment, and padding, which can be used to produce more efficient code in some cases.",
+    "section_path": [
+      "Performance"
+    ],
+    "index": 176
+  },
+  {
+    "type": "heading",
+    "text": "Adoption",
+    "section_path": [
+      "Adoption"
+    ],
+    "index": 177
+  },
+  {
+    "type": "paragraph",
+    "text": "In web services, OpenDNS, a DNS resolution service owned by Cisco, uses Rust internally. Amazon Web Services uses Rust in \"performance-sensitive components\" of its several services. In 2019, AWS open-sourced Firecracker, a virtualization solution primarily written in Rust. Microsoft Azure IoT Edge, a platform used to run Azure services on IoT devices, has components implemented in Rust. Microsoft also uses Rust to run containerized modules with WebAssembly and Kubernetes. Cloudflare, a company providing content delivery network services, used Rust to build a new web proxy named Pingora for increased performance and efficiency. The npm package manager used Rust for its production authentication service in 2019.",
+    "section_path": [
+      "Adoption"
+    ],
+    "index": 178
+  },
+  {
+    "type": "paragraph",
+    "text": "In operating systems, the Linux kernel began introducing experimental support for Rust code in Version 6.1 in late 2022, as part of the Rust for Linux project. The first drivers written in Rust were included in version 6.8. In 2025, kernel developers at the Linux Kernel Developers Summit determined the project to be a success, and Rust usage for kernel code will no longer be considered experimental. The Android developers used Rust in 2021 to rewrite existing components. Microsoft has rewritten parts of Windows in Rust. The r9 project aims to re-implement Plan 9 from Bell Labs in Rust. Rust has also been used in the development of new operating systems such as Redox, a \"Unix-like\" operating system and microkernel, Theseus, an experimental operating system with modular state management, and most of Fuchsia. Rust is used for command-line tools and operating system components such as stratisd, a file system manager and COSMIC, a desktop environment by System76.",
+    "section_path": [
+      "Adoption"
+    ],
+    "index": 179
+  },
+  {
+    "type": "paragraph",
+    "text": "In web development, Deno, a secure runtime for JavaScript and TypeScript, is built on top of V8 using Rust and Tokio. Other notable adoptions in this space include Ruffle, an open-source SWF emulator, and Polkadot, an open source blockchain and cryptocurrency platform. Components from the Servo browser engine (funded by Mozilla and Samsung) were incorporated in the Gecko browser engine underlying Firefox. In January 2023, Google (Alphabet) announced support for using third party Rust libraries in Chromium.",
+    "section_path": [
+      "Adoption"
+    ],
+    "index": 180
+  },
+  {
+    "type": "paragraph",
+    "text": "In other uses, Discord, an instant messaging software company, rewrote parts of its system in Rust for increased performance in 2020. In the same year, Dropbox announced that its file synchronization had been rewritten in Rust. Facebook (Meta) used Rust to redesign its system that manages source code for internal projects.",
+    "section_path": [
+      "Adoption"
+    ],
+    "index": 181
+  },
+  {
+    "type": "paragraph",
+    "text": "In the 2025 Stack Overflow Developer Survey, 14.8% of respondents had recently done extensive development in Rust. The survey named Rust the \"most admired programming language\" annually from 2016 to 2025 (inclusive), as measured by the number of existing developers interested in continuing to work in the language. In 2025, 29.2% of developers not currently working in Rust expressed an interest in doing so.",
+    "section_path": [
+      "Adoption"
+    ],
+    "index": 182
+  },
+  {
+    "type": "heading",
+    "text": "In academic research",
+    "section_path": [
+      "In academic research"
+    ],
+    "index": 183
+  },
+  {
+    "type": "paragraph",
+    "text": "Rust's safety and performance have been investigated in programming languages research.",
+    "section_path": [
+      "In academic research"
+    ],
+    "index": 184
+  },
+  {
+    "type": "paragraph",
+    "text": "In other fields, a journal article published to Proceedings of the International Astronomical Union used Rust to simulate multi-planet systems. An article published in Nature shared stories of bioinformaticians using Rust. Both articles cited Rust's performance and safety as advantages, and the learning curve as being a primary drawback to Rust adoption.",
+    "section_path": [
+      "In academic research"
+    ],
+    "index": 185
+  },
+  {
+    "type": "paragraph",
+    "text": "The 2025 DARPA project TRACTOR aims to automatically translate C to Rust using techniques such as static analysis, dynamic analysis, and large language models.",
+    "section_path": [
+      "In academic research"
+    ],
+    "index": 186
+  },
+  {
+    "type": "heading",
+    "text": "Community",
+    "section_path": [
+      "Community"
+    ],
+    "index": 187
+  },
+  {
+    "type": "paragraph",
+    "text": "According to the MIT Technology Review, the Rust community has been seen as \"unusually friendly\" to newcomers and particularly attracted people from the queer community, partly due to its code of conduct. Inclusiveness has been cited as an important factor for some Rust developers. The official Rust blog collects and publishes demographic data each year.",
+    "section_path": [
+      "Community"
+    ],
+    "index": 188
+  },
+  {
+    "type": "heading",
+    "text": "Rust Foundation",
+    "section_path": [
+      "Community",
+      "Rust Foundation"
+    ],
+    "index": 189
+  },
+  {
+    "type": "paragraph",
+    "text": "The Rust Foundation is a non-profit membership organization incorporated in United States; it manages the Rust trademark, infrastructure, and assets.",
+    "section_path": [
+      "Community",
+      "Rust Foundation"
+    ],
+    "index": 190
+  },
+  {
+    "type": "paragraph",
+    "text": "It was established on February 8, 2021, with five founding corporate members (Amazon Web Services, Huawei, Google, Microsoft, and Mozilla). The foundation's board was chaired by Shane Miller, with Ashley Williams as interim executive director. In late 2021, Rebecca Rumbul became Executive Director and CEO.",
+    "section_path": [
+      "Community",
+      "Rust Foundation"
+    ],
+    "index": 191
+  },
+  {
+    "type": "heading",
+    "text": "Governance teams",
+    "section_path": [
+      "Community",
+      "Governance teams"
+    ],
+    "index": 192
+  },
+  {
+    "type": "paragraph",
+    "text": "The Rust project is maintained by 8 top-level teams as of November 2025: the leadership council, compiler team, dev tools team, infrastructure team, language team, launching pad, library team, and moderation team. The leadership council oversees the project and is formed by representatives among the other teams.",
+    "section_path": [
+      "Community",
+      "Governance teams"
+    ],
+    "index": 193
+  },
+  {
+    "type": "heading",
+    "text": "See also",
+    "section_path": [
+      "See also"
+    ],
+    "index": 194
+  },
+  {
+    "type": "list_item",
+    "text": "Comparison of programming languages",
+    "section_path": [
+      "See also"
+    ],
+    "index": 195
+  },
+  {
+    "type": "list_item",
+    "text": "History of programming languages",
+    "section_path": [
+      "See also"
+    ],
+    "index": 196
+  },
+  {
+    "type": "list_item",
+    "text": "List of programming languages",
+    "section_path": [
+      "See also"
+    ],
+    "index": 197
+  },
+  {
+    "type": "list_item",
+    "text": "List of programming languages by type",
+    "section_path": [
+      "See also"
+    ],
+    "index": 198
+  },
+  {
+    "type": "list_item",
+    "text": "List of Rust software and tools",
+    "section_path": [
+      "See also"
+    ],
+    "index": 199
+  },
+  {
+    "type": "list_item",
+    "text": "Outline of the Rust programming language",
+    "section_path": [
+      "See also"
+    ],
+    "index": 200
+  },
+  {
+    "type": "heading",
+    "text": "Notes",
+    "section_path": [
+      "Notes"
+    ],
+    "index": 201
+  },
+  {
+    "type": "heading",
+    "text": "References",
+    "section_path": [
+      "References"
+    ],
+    "index": 202
+  },
+  {
+    "type": "heading",
+    "text": "Book sources",
+    "section_path": [
+      "References",
+      "Book sources"
+    ],
+    "index": 203
+  },
+  {
+    "type": "heading",
+    "text": "Others",
+    "section_path": [
+      "References",
+      "Others"
+    ],
+    "index": 204
+  },
+  {
+    "type": "heading",
+    "text": "External links",
+    "section_path": [
+      "External links"
+    ],
+    "index": 205
+  },
+  {
+    "type": "list_item",
+    "text": "Official website",
+    "section_path": [
+      "External links"
+    ],
+    "index": 206
+  },
+  {
+    "type": "list_item",
+    "text": "Source code on GitHub",
+    "section_path": [
+      "External links"
+    ],
+    "index": 207
+  },
+  {
+    "type": "list_item",
+    "text": "Documentation",
+    "section_path": [
+      "External links"
+    ],
+    "index": 208
+  }
+]

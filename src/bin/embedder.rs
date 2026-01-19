@@ -234,6 +234,7 @@ fn process_stream<R: BufRead, W: Write>(
             let record = EmbeddedChunkRecord {
                 url: page_url.clone(),
                 chunk_id: chunk.chunk_id,
+                block_index: chunk.block_index,
                 text: chunk.text.clone(),
                 section_path: chunk.section_path.clone(),
                 token_estimate: chunk.token_estimate,

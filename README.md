@@ -123,11 +123,11 @@ cargo run --example wiki \
 ```
 
 Chunk and block bounds can be tuned via `--normalize-chunk-tokens`, `--normalize-overlap-tokens`, and
-`--normalize-max-blocks`. The JSON payload includes per-block heading context, content hashes, token estimates, and
-metadata such as HTTP status, language hints, and shard ownership so downstream embedding/indexing jobs can ingest it
-directly. When `--normalize-manifest-jsonl` is set, the runtime loads any existing manifest at that path before
-overwriting it, then appends digest records (`url`, `checksum`, `last_seen_epoch_ms`, `changed`). Keeping that JSONL
-file between runs unlocks true incremental diffs instead of just reporting changes that happened within a single
+`--normalize-max-blocks`. The JSON payload includes per-block heading context, block indices, content hashes, token
+estimates, and metadata such as HTTP status, language hints, and shard ownership so downstream embedding/indexing jobs
+can ingest it directly. When `--normalize-manifest-jsonl` is set, the runtime loads any existing manifest at that path
+before overwriting it, then appends digest records (`url`, `checksum`, `last_seen_epoch_ms`, `changed`). Keeping that
+JSONL file between runs unlocks true incremental diffs instead of just reporting changes that happened within a single
 process.
 
 ## Embedding Pipeline
@@ -253,6 +253,7 @@ cargo run --bin fts_indexer -- \
 Columns created by default:
 
 - `url TEXT`, `chunk_id BIGINT` primary key for provenance.
+- `block_index BIGINT` for chunk-to-block ordering context.
 - `text`, `section_path JSONB`, `token_estimate`, `checksum`, `last_seen_epoch_ms` for metadata.
 - `embedding VECTOR(<dims>)` where `<dims>` matches the first record’s vector length.
 - `text_tsv TSVECTOR` generated from the chunk text, indexed for lexical search.

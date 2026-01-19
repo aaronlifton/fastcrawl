@@ -166,6 +166,7 @@ struct ResponseMeta {
 struct ResponseChunk {
     url: String,
     chunk_id: i64,
+    block_index: i64,
     section_path: Vec<SectionHeading>,
     token_estimate: i64,
     text: String,
@@ -181,6 +182,7 @@ struct ResponseChunk {
 struct ChunkData {
     url: String,
     chunk_id: i64,
+    block_index: i64,
     section_path: Vec<SectionHeading>,
     token_estimate: i64,
     text: String,
@@ -505,6 +507,7 @@ async fn fetch_lexical_rows(
 fn chunk_data_from_row(row: &Row) -> Result<ChunkData> {
     let url: String = row.get("url");
     let chunk_id: i64 = row.get("chunk_id");
+    let block_index: i64 = row.get("block_index");
     let text: String = row.get("text");
     let PgJson(section_path): PgJson<Vec<SectionHeading>> = row.get("section_path");
     let token_estimate: i64 = row.get("token_estimate");
@@ -516,6 +519,7 @@ fn chunk_data_from_row(row: &Row) -> Result<ChunkData> {
     Ok(ChunkData {
         url,
         chunk_id,
+        block_index,
         section_path,
         token_estimate,
         text,
@@ -571,6 +575,7 @@ impl Candidate {
         ResponseChunk {
             url: self.data.url,
             chunk_id: self.data.chunk_id,
+            block_index: self.data.block_index,
             section_path: self.data.section_path,
             token_estimate: self.data.token_estimate,
             text: self.data.text,
@@ -684,6 +689,7 @@ fn select_sql(table: &TableName) -> String {
         "SELECT \
             url, \
             chunk_id, \
+            block_index, \
             text, \
             section_path, \
             token_estimate, \
@@ -703,6 +709,7 @@ fn select_lexical_sql(table: &TableName) -> String {
         SELECT
             url,
             chunk_id,
+            block_index,
             text,
             section_path,
             token_estimate,

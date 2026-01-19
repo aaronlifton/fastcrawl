@@ -11,6 +11,9 @@ pub struct EmbeddedChunkRecord {
     pub url: String,
     /// Normalizer-assigned chunk identifier.
     pub chunk_id: usize,
+    /// Block index of the first block in the chunk.
+    #[serde(default)]
+    pub block_index: usize,
     /// Chunk body text submitted to the embedding model.
     pub text: String,
     /// Hierarchical section breadcrumb for the chunk.

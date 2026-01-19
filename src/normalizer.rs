@@ -1,5 +1,6 @@
 //! HTML corpus normalization primitives for downstream LLM/RAG pipelines.
 
+use crate::debug_log;
 use crc32fast::Hasher as Crc32;
 use reqwest::header::{HeaderMap, HeaderName, CONTENT_LANGUAGE, CONTENT_TYPE};
 use scraper::{ElementRef, Html, Selector};
@@ -10,6 +11,7 @@ use std::borrow::Cow;
 use std::fmt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
+use wiki_parser::{BlockKind as WikiBlockKind, StreamingExtractor};
 
 /// Raw page bytes plus crawl metadata awaiting normalization.
 #[derive(Debug, Clone)]
@@ -217,6 +219,9 @@ pub struct TextBlock {
     pub kind: BlockKind,
     /// Collapsed textual content.
     pub text: String,
+    /// Block index in document order.
+    #[serde(default)]
+    pub block_index: usize,
     /// Character offset (in UTF-8 code units) within the normalized body.
     pub char_start: usize,
     /// Exclusive end offset within the normalized body.
@@ -232,6 +237,9 @@ pub struct TextBlock {
 pub struct NormalizedChunk {
     /// Monotonic chunk identifier assigned during normalization.
     pub chunk_id: usize,
+    /// Block index of the first block in this chunk.
+    #[serde(default)]
+    pub block_index: usize,
     /// Concatenated text for this chunk.
     pub text: String,
     /// Estimated token count.
@@ -283,12 +291,15 @@ impl Default for NormalizationConfig {
 pub enum NormalizationError {
     /// The response body was empty.
     EmptyBody,
+    /// Streaming Wikipedia parser failed.
+    WikiStream(String),
 }
 
 impl fmt::Display for NormalizationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EmptyBody => write!(f, "no body bytes available for normalization"),
+            Self::WikiStream(err) => write!(f, "wiki streaming parse failed: {err}"),
         }
     }
 }
@@ -322,13 +333,25 @@ impl Normalizer {
             return Err(NormalizationError::EmptyBody);
         }
 
-        let (decoded, lossy) = decode_body(&page.body);
-        let document = Html::parse_document(&decoded);
-        let root = self.selectors.pick_root(&document);
+        let lossy = is_lossy_utf8(&page.body);
 
-        let mut collector = BlockCollector::new(&self.config);
-        collector.walk(root);
-        let (body_text, blocks) = collector.finish();
+        let (body_text, blocks) = if is_wikipedia_page(&page.url) {
+            self.normalize_wikipedia(&page.body)?
+        } else {
+            let decoded = decode_body(&page.body);
+            let document = Html::parse_document(decoded.as_ref());
+            let root = self.selectors.pick_root(&document);
+
+            let mut collector = BlockCollector::new(&self.config);
+            collector.walk(root);
+            collector.finish()
+        };
+        debug_log!(
+            "normalize: short_text={} body_text_len={}, blocks_len={}",
+            &body_text[..body_text.len().min(128)],
+            body_text.len(),
+            blocks.len()
+        );
 
         let chunks = chunk_blocks(&blocks, &self.config);
         let metadata = PageMetadata::from_page(page, lossy);
@@ -339,6 +362,61 @@ impl Normalizer {
             blocks,
             chunks,
         })
+    }
+
+    fn normalize_wikipedia(
+        &self,
+        body: &[u8],
+    ) -> Result<(String, Vec<TextBlock>), NormalizationError> {
+        let mut extractor = StreamingExtractor::new();
+        extractor
+            .write(body)
+            .map_err(|err| NormalizationError::WikiStream(err.to_string()))?;
+        let blocks = extractor
+            .finish()
+            .map_err(|err| NormalizationError::WikiStream(err.to_string()))?;
+
+        debug_log!("blocks_len={}", blocks.len());
+
+        let mut body_text = String::new();
+        let mut out_blocks = Vec::new();
+
+        for block in blocks {
+            if block.text.is_empty() {
+                continue;
+            }
+            let kind = match block.kind {
+                WikiBlockKind::Paragraph => BlockKind::Paragraph,
+                WikiBlockKind::Heading => BlockKind::Heading {
+                    level: heading_level_from_path(&block.section_path),
+                },
+                WikiBlockKind::ListItem => BlockKind::ListItem,
+                WikiBlockKind::Code => BlockKind::Preformatted,
+            };
+            if !body_text.is_empty() {
+                body_text.push_str("\n\n");
+            }
+            let start = body_text.len();
+            debug_log!("start={}", start);
+            body_text.push_str(&block.text);
+            let end = body_text.len();
+            let tokens = estimate_tokens(&block.text);
+            let section_path = section_path_from_titles(&block.section_path);
+            out_blocks.push(TextBlock {
+                kind,
+                text: block.text,
+                block_index: block.index,
+                char_start: start,
+                char_end: end,
+                token_estimate: tokens,
+                section_path,
+            });
+            if out_blocks.len() >= self.config.max_blocks {
+                break;
+            }
+        }
+
+        Ok((body_text, out_blocks))
     }
 }
 
@@ -368,14 +446,15 @@ impl RootSelectors {
     }
 }
 
-fn decode_body(bytes: &[u8]) -> (Cow<'_, str>, bool) {
+fn decode_body(bytes: &[u8]) -> Cow<'_, str> {
     match std::str::from_utf8(bytes) {
-        Ok(text) => (Cow::Borrowed(text), false),
-        Err(_) => (
-            Cow::Owned(String::from_utf8_lossy(bytes).into_owned()),
-            true,
-        ),
+        Ok(text) => Cow::Borrowed(text),
+        Err(_) => Cow::Owned(String::from_utf8_lossy(bytes).into_owned()),
     }
+}
+
+fn is_lossy_utf8(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes).is_err()
 }
 
 struct BlockCollector<'cfg> {
@@ -483,6 +562,7 @@ impl<'cfg> BlockCollector<'cfg> {
         self.blocks.push(TextBlock {
             kind,
             text,
+            block_index: self.blocks.len(),
             char_start: start,
             char_end: end,
             token_estimate: tokens,
@@ -532,10 +612,9 @@ fn is_navbox_descendant(element: &ElementRef<'_>) -> bool {
 }
 
 fn ancestor_has_navbox_class(element: &ElementRef<'_>) -> bool {
-    element
-        .value()
-        .classes()
-        .any(|class_name| class_name.eq_ignore_ascii_case("navbox") || class_name.contains("navbox"))
+    element.value().classes().any(|class_name| {
+        class_name.eq_ignore_ascii_case("navbox") || class_name.contains("navbox")
+    })
 }
 
 fn collapse_newlines(input: &str) -> String {
@@ -595,6 +674,28 @@ fn chunk_blocks(blocks: &[TextBlock], config: &NormalizationConfig) -> Vec<Norma
     chunks
 }
 
+fn is_wikipedia_page(url: &Url) -> bool {
+    url.domain()
+        .map(|domain| domain.contains("wikipedia.org"))
+        .unwrap_or(false)
+}
+
+fn section_path_from_titles(titles: &[String]) -> Vec<SectionHeading> {
+    titles
+        .iter()
+        .enumerate()
+        .map(|(idx, title)| SectionHeading {
+            level: ((idx + 1) as u8).min(6),
+            title: title.clone(),
+        })
+        .collect()
+}
+
+fn heading_level_from_path(path: &[String]) -> u8 {
+    let depth = path.len().max(1);
+    (depth as u8).min(6)
+}
+
 fn flush_chunk(chunks: &mut Vec<NormalizedChunk>, buffer: &[usize], blocks: &[TextBlock]) {
     if buffer.is_empty() {
         return;
@@ -616,6 +717,7 @@ fn flush_chunk(chunks: &mut Vec<NormalizedChunk>, buffer: &[usize], blocks: &[Te
 
     chunks.push(NormalizedChunk {
         chunk_id: chunks.len(),
+        block_index: blocks[first].block_index,
         text,
         token_estimate,
         char_start: blocks[first].char_start,
@@ -750,15 +852,52 @@ mod tests {
         let normalizer = Normalizer::new(NormalizationConfig::default());
         let normalized = normalizer.normalize(&page).expect("normalize");
 
-        assert!(normalized
-            .body_text
-            .contains("Lead paragraph stays."));
-        assert!(normalized
-            .body_text
-            .contains("Main content should remain."));
+        assert!(normalized.body_text.contains("Lead paragraph stays."));
+        assert!(normalized.body_text.contains("Main content should remain."));
         assert!(
             !normalized.body_text.contains("Navbox item"),
             "navbox text should be skipped"
+        );
+    }
+
+    #[test]
+    fn normalizes_wikipedia_page_with_streaming_parser() {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/html"));
+        let body = br#"
+            <html>
+              <body>
+                <div id="mw-content-text">
+                  <div class="mw-parser-output">
+                    <h2>Overview</h2>
+                    <p>Fish &amp; chips.</p>
+                    <ul><li>Item one</li></ul>
+                  </div>
+                </div>
+              </body>
+            </html>
+        "#
+        .to_vec();
+
+        let page = FetchedPage::new(
+            Url::parse("https://en.wikipedia.org/wiki/Fish").unwrap(),
+            1,
+            SystemTime::now(),
+            200,
+            headers,
+            body,
+        );
+
+        let normalizer = Normalizer::new(NormalizationConfig::default());
+        let page = normalizer.normalize(&page).expect("normalize");
+
+        assert_eq!(page.blocks.len(), 3);
+        assert_eq!(page.blocks[0].text, "Overview");
+        assert_eq!(page.blocks[1].text, "Fish & chips.");
+        assert_eq!(page.blocks[0].section_path.len(), 1);
+        assert_eq!(
+            page.blocks[1].section_path.last().unwrap().title,
+            "Overview"
         );
     }
 }

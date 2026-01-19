@@ -19,9 +19,9 @@ use serde::Serialize;
 use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
+use std::hash::{Hash, Hasher};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -55,29 +55,33 @@ type DynError = Box<dyn std::error::Error + Send + Sync>;
 #[derive(Clone)]
 struct SharedRun {
     stop_requested: Arc<AtomicBool>,
+    stop_crawl_requested: Arc<AtomicBool>,
     active_tasks: Arc<AtomicUsize>,
     metrics: Arc<Metrics>,
     controls: Arc<CrawlControls>,
     run_duration: Duration,
     normalization: Option<Arc<NormalizationHandle>>,
+    normalization_inflight: Arc<AtomicUsize>,
 }
 
 impl SharedRun {
     fn new(cli: &Cli) -> Result<Self, DynError> {
         let normalization = cli
             .normalization_settings()
-            .map(|settings| NormalizationHandle::new(settings))
+            .map(NormalizationHandle::new)
             .transpose()
             .map_err(|err| Box::new(err) as DynError)?
             .map(Arc::new);
 
         Ok(Self {
+            stop_crawl_requested: Arc::new(AtomicBool::new(false)),
             stop_requested: Arc::new(AtomicBool::new(false)),
             active_tasks: Arc::new(AtomicUsize::new(0)),
             metrics: Arc::new(Metrics::default()),
             controls: Arc::new(cli.build_controls()),
             run_duration: cli.run_duration(),
             normalization,
+            normalization_inflight: Arc::new(AtomicUsize::new(0)),
         })
     }
 }
@@ -245,6 +249,7 @@ pub fn run(cli: Cli, seeds: &[&str], filter: UrlFilter) -> Result<(), DynError> 
 struct AppState {
     registry: Arc<AgentRegistry<DEFAULT_AGENT_CAPACITY, DEFAULT_QUEUE_DEPTH>>,
     frontier: Arc<Frontier<DEFAULT_FRONTIER_QUEUE, DEFAULT_FRONTIER_SEEN>>,
+    stop_crawl_requested: Arc<AtomicBool>,
     stop_requested: Arc<AtomicBool>,
     active_tasks: Arc<AtomicUsize>,
     metrics: Arc<Metrics>,
@@ -253,6 +258,7 @@ struct AppState {
     run_duration: Duration,
     link_filter: UrlFilter,
     normalization: Option<Arc<NormalizationRuntime>>,
+    normalization_inflight: Arc<AtomicUsize>,
 }
 
 impl AppState {
@@ -278,6 +284,7 @@ impl AppState {
         Ok(Self {
             registry,
             frontier,
+            stop_crawl_requested: Arc::clone(&shared.stop_crawl_requested),
             stop_requested: Arc::clone(&shared.stop_requested),
             active_tasks: Arc::clone(&shared.active_tasks),
             metrics: Arc::clone(&shared.metrics),
@@ -286,6 +293,7 @@ impl AppState {
             run_duration: shared.run_duration,
             link_filter: filter,
             normalization,
+            normalization_inflight: Arc::clone(&shared.normalization_inflight),
         })
     }
 }
@@ -375,9 +383,7 @@ fn run_multi_thread(cli: Cli, seeds: &[&str], filter: UrlFilter) -> Result<(), D
         handle.join().expect("shard thread panicked")?;
     }
 
-    shared
-        .metrics
-        .report(start.elapsed(), shared.run_duration);
+    shared.metrics.report(start.elapsed(), shared.run_duration);
     Ok(())
 }
 
@@ -407,12 +413,20 @@ async fn run_shard_streaming(
 
     let inbox_handle = {
         let frontier = Arc::clone(&state.frontier);
-        let stop_requested = Arc::clone(&state.stop_requested);
+        let stop_crawl_requested = Arc::clone(&state.stop_crawl_requested);
         let controls = Arc::clone(&state.controls);
         let metrics = Arc::clone(&state.metrics);
         let filter = Arc::clone(&state.link_filter);
         spawn_local(async move {
-            shard_inbox_loop(inbox, frontier, stop_requested, controls, metrics, filter).await;
+            shard_inbox_loop(
+                inbox,
+                frontier,
+                stop_crawl_requested,
+                controls,
+                metrics,
+                filter,
+            )
+            .await;
         })
     };
 
@@ -446,8 +460,14 @@ async fn finish_run(
     report_metrics: bool,
     heartbeat: Option<tokio::task::JoinHandle<()>>,
 ) {
+    // eprintln!(
+    //     "deadline: active_tasks={} normalization_inflight={}",
+    //     state.active_tasks.load(Ordering::Acquire),
+    //     state.normalization.normalizer..load(Ordering::Acquire),
+    // );
     wait_for_stop_signal(&state).await;
-    state.stop_requested.store(true, Ordering::Release);
+    // Stop the crawl while letting normalization continue.
+    state.stop_crawl_requested.store(true, Ordering::Release);
     wait_for_drain(
         state.registry.as_ref(),
         state.frontier.as_ref(),
@@ -465,9 +485,7 @@ async fn finish_run(
         let _ = hb.await;
     }
     if report_metrics {
-        state
-            .metrics
-            .report(start.elapsed(), state.run_duration);
+        state.metrics.report(start.elapsed(), state.run_duration);
     }
 }
 
@@ -567,6 +585,7 @@ fn spawn_heartbeat(state: &AppState) -> tokio::task::JoinHandle<()> {
     let active_tasks = Arc::clone(&state.active_tasks);
     let metrics = Arc::clone(&state.metrics);
     let stop_requested = Arc::clone(&state.stop_requested);
+    let inflight = Arc::clone(&state.normalization_inflight);
     spawn_local(async move {
         let mut tick: u64 = 0;
         loop {
@@ -575,11 +594,13 @@ fn spawn_heartbeat(state: &AppState) -> tokio::task::JoinHandle<()> {
             let active = active_tasks.load(Ordering::Acquire);
             let fetched = metrics.pages_fetched.load(Ordering::Relaxed);
             let discovered = metrics.urls_discovered.load(Ordering::Relaxed);
+            let normalized = metrics.pages_normalized.load(Ordering::Relaxed);
             let enqueued = metrics.urls_enqueued.load(Ordering::Relaxed);
             let dupes = metrics.duplicates_filtered.load(Ordering::Relaxed);
+            let inflight = inflight.load(Ordering::Relaxed);
             eprintln!(
-                "[hb] tick={} pending={} active={} fetched={} discovered={} enqueued={} dupes={}",
-                tick, pending, active, fetched, discovered, enqueued, dupes
+                "[hb] tick={} pending={} active={} fetched={} discovered={} normalized = {} enqueued={} dupes={} norm_inflight={}",
+                tick, pending, active, fetched, discovered, normalized, enqueued, dupes, inflight
             );
             tick += 1;
             if stop_requested.load(Ordering::Acquire) && pending == 0 && active == 0 {
@@ -600,7 +621,7 @@ async fn worker_loop_streaming<
     registry: Arc<AgentRegistry<COUNT, DEPTH>>,
     frontier: Arc<Frontier<QUEUE, SEEN>>,
     client: Client,
-    stop_requested: Arc<AtomicBool>,
+    stop_crawl_requested: Arc<AtomicBool>,
     active_tasks: Arc<AtomicUsize>,
     controls: Arc<CrawlControls>,
     metrics: Arc<Metrics>,
@@ -618,7 +639,7 @@ async fn worker_loop_streaming<
             &client,
             Arc::clone(&frontier),
             task,
-            stop_requested.as_ref(),
+            stop_crawl_requested.as_ref(),
             Arc::clone(&controls),
             metrics.as_ref(),
             Arc::clone(&filter),
@@ -649,7 +670,7 @@ async fn worker_loop_streaming_sharded<
     registry: Arc<AgentRegistry<COUNT, DEPTH>>,
     frontier: Arc<Frontier<QUEUE, SEEN>>,
     client: Client,
-    stop_requested: Arc<AtomicBool>,
+    stop_crawl_requested: Arc<AtomicBool>,
     active_tasks: Arc<AtomicUsize>,
     controls: Arc<CrawlControls>,
     metrics: Arc<Metrics>,
@@ -668,7 +689,7 @@ async fn worker_loop_streaming_sharded<
             &client,
             Arc::clone(&frontier),
             task,
-            stop_requested.as_ref(),
+            stop_crawl_requested.as_ref(),
             Arc::clone(&controls),
             metrics.as_ref(),
             Arc::clone(&filter),
@@ -693,7 +714,7 @@ async fn handle_task_streaming<const QUEUE: usize, const SEEN: usize>(
     client: &Client,
     frontier: Arc<Frontier<QUEUE, SEEN>>,
     task: CrawlTask,
-    stop_requested: &AtomicBool,
+    stop_crawl_requested: &AtomicBool,
     controls: Arc<CrawlControls>,
     metrics: &Metrics,
     filter: UrlFilter,
@@ -769,7 +790,7 @@ async fn handle_task_streaming<const QUEUE: usize, const SEEN: usize>(
         discovered_links,
         task.depth(),
         frontier,
-        stop_requested,
+        stop_crawl_requested,
         controls,
         metrics,
         filter,
@@ -783,7 +804,7 @@ async fn handle_task_streaming_sharded<const QUEUE: usize, const SEEN: usize>(
     client: &Client,
     frontier: Arc<Frontier<QUEUE, SEEN>>,
     task: CrawlTask,
-    stop_requested: &AtomicBool,
+    stop_crawl_requested: &AtomicBool,
     controls: Arc<CrawlControls>,
     metrics: &Metrics,
     filter: UrlFilter,
@@ -849,6 +870,7 @@ async fn handle_task_streaming_sharded<const QUEUE: usize, const SEEN: usize>(
                 .process(base, task.depth(), status_code, headers, body)
                 .await
                 .map_err(|err| TaskError::normalize(&url, err))?;
+            metrics.record_page_normalized();
         }
     }
 
@@ -859,7 +881,7 @@ async fn handle_task_streaming_sharded<const QUEUE: usize, const SEEN: usize>(
     route_discovered_links(
         router,
         frontier,
-        stop_requested,
+        stop_crawl_requested,
         controls,
         metrics,
         filter,
@@ -873,13 +895,13 @@ async fn enqueue_discovered_links<const QUEUE: usize, const SEEN: usize>(
     discovered_links: Vec<Url>,
     parent_depth: u8,
     frontier: Arc<Frontier<QUEUE, SEEN>>,
-    stop_requested: &AtomicBool,
+    stop_crawl_requested: &AtomicBool,
     controls: Arc<CrawlControls>,
     metrics: &Metrics,
     filter: UrlFilter,
 ) -> Result<(), TaskError> {
     for discovered in discovered_links {
-        if stop_requested.load(Ordering::Acquire) {
+        if stop_crawl_requested.load(Ordering::Acquire) {
             break;
         }
         let domain_allowed = discovered
@@ -932,7 +954,7 @@ async fn enqueue_discovered_links<const QUEUE: usize, const SEEN: usize>(
 async fn route_discovered_links<const QUEUE: usize, const SEEN: usize>(
     router: &ShardRouter,
     frontier: Arc<Frontier<QUEUE, SEEN>>,
-    stop_requested: &AtomicBool,
+    stop_crawl_requested: &AtomicBool,
     controls: Arc<CrawlControls>,
     metrics: &Metrics,
     filter: UrlFilter,
@@ -960,7 +982,7 @@ async fn route_discovered_links<const QUEUE: usize, const SEEN: usize>(
             local_links,
             parent_depth,
             Arc::clone(&frontier),
-            stop_requested,
+            stop_crawl_requested,
             Arc::clone(&controls),
             metrics,
             Arc::clone(&filter),
@@ -1130,14 +1152,14 @@ struct PendingBatch {
 async fn shard_inbox_loop<const QUEUE: usize, const SEEN: usize>(
     mut inbox: mpsc::Receiver<LinkBatch>,
     frontier: Arc<Frontier<QUEUE, SEEN>>,
-    stop_requested: Arc<AtomicBool>,
+    stop_crawl_requested: Arc<AtomicBool>,
     controls: Arc<CrawlControls>,
     metrics: Arc<Metrics>,
     filter: UrlFilter,
 ) {
     let mut closed = false;
     while let Some(batch) = {
-        if stop_requested.load(Ordering::Acquire) && !closed {
+        if stop_crawl_requested.load(Ordering::Acquire) && !closed {
             inbox.close();
             closed = true;
         }
@@ -1151,7 +1173,7 @@ async fn shard_inbox_loop<const QUEUE: usize, const SEEN: usize>(
             batch.links,
             batch.depth,
             Arc::clone(&frontier),
-            stop_requested.as_ref(),
+            stop_crawl_requested.as_ref(),
             Arc::clone(&controls),
             metrics.as_ref(),
             Arc::clone(&filter),
@@ -1168,15 +1190,17 @@ async fn shard_inbox_loop<const QUEUE: usize, const SEEN: usize>(
 struct NormalizationHandle {
     config: NormalizationConfig,
     stripes: usize,
-    page_senders: Option<Vec<mpsc::Sender<Arc<NormalizedPage>>>>,
+    page_senders: Vec<mpsc::Sender<Arc<InflightPage>>>,
     page_writers: Option<Vec<std::thread::JoinHandle<()>>>,
     manifest_sender: Option<mpsc::Sender<Arc<NormalizedPage>>>,
     manifest_writer: Option<std::thread::JoinHandle<()>>,
+    normalization_inflight: Arc<AtomicUsize>,
 }
 
 impl NormalizationHandle {
     fn new(settings: NormalizationSettings) -> io::Result<Self> {
         let stripes = settings.stripes.max(1);
+        let inflight = Arc::new(AtomicUsize::new(0));
 
         let mut page_senders = Vec::with_capacity(stripes);
         let mut page_writers = Vec::with_capacity(stripes);
@@ -1186,12 +1210,13 @@ impl NormalizationHandle {
             let page_sink = JsonlSink::new(sink_path)?;
             let (sender, receiver) = mpsc::channel(NORMALIZATION_CHANNEL_CAPACITY);
 
+            // let inflight = Arc::clone(&inflight);
             let handle = thread::Builder::new()
                 .name(format!("fastcrawl-normalize-writer-{stripe}"))
                 .spawn(move || {
-                    let mut receiver: mpsc::Receiver<Arc<NormalizedPage>> = receiver;
+                    let mut receiver: mpsc::Receiver<Arc<InflightPage>> = receiver;
                     while let Some(page) = receiver.blocking_recv() {
-                        if let Err(err) = page_sink.write_json(&*page) {
+                        if let Err(err) = page_sink.write_json(&*page.normalized_page) {
                             eprintln!("normalization writer error: {err}");
                         }
                     }
@@ -1209,10 +1234,8 @@ impl NormalizationHandle {
                     .name("fastcrawl-normalize-manifest".into())
                     .spawn(move || {
                         let mut receiver: mpsc::Receiver<Arc<NormalizedPage>> = receiver;
-                        let mut manifest_sink =
-                            ManifestWriter::new(path).unwrap_or_else(|err| {
-                                panic!("failed to open manifest sink: {err}")
-                            });
+                        let mut manifest_sink = ManifestWriter::new(path)
+                            .unwrap_or_else(|err| panic!("failed to open manifest sink: {err}"));
                         while let Some(page) = receiver.blocking_recv() {
                             if let Err(err) = manifest_sink.write_page(&page) {
                                 eprintln!("normalization manifest error: {err}");
@@ -1228,20 +1251,18 @@ impl NormalizationHandle {
         Ok(Self {
             config: settings.config,
             stripes,
-            page_senders: Some(page_senders),
+            page_senders,
             page_writers: Some(page_writers),
             manifest_sender,
             manifest_writer,
+            normalization_inflight: inflight,
         })
     }
 }
 
 impl NormalizationHandle {
-    fn page_senders(&self) -> Vec<mpsc::Sender<Arc<NormalizedPage>>> {
-        self.page_senders
-            .as_ref()
-            .expect("normalization page senders missing")
-            .clone()
+    fn page_senders(&self) -> Vec<mpsc::Sender<Arc<InflightPage>>> {
+        self.page_senders.clone()
     }
 
     fn manifest_sender(&self) -> Option<mpsc::Sender<Arc<NormalizedPage>>> {
@@ -1252,7 +1273,6 @@ impl NormalizationHandle {
 impl Drop for NormalizationHandle {
     fn drop(&mut self) {
         // Drop senders so writer threads can observe channel closure.
-        self.page_senders.take();
         self.manifest_sender.take();
 
         if let Some(writers) = self.page_writers.take() {
@@ -1351,13 +1371,38 @@ fn load_manifest_digests(path: &Path) -> io::Result<HashMap<String, (u32, u64)>>
     Ok(digests)
 }
 
+struct InflightPage {
+    normalized_page: Arc<NormalizedPage>,
+    inflight: Arc<AtomicUsize>,
+}
+
+impl InflightPage {
+    fn new(page: Arc<NormalizedPage>, inflight: Arc<AtomicUsize>) -> Self {
+        Self {
+            normalized_page: page,
+            inflight,
+        }
+    }
+
+    // fn page(&self) -> &Arc<NormalizedPage> {
+    //     &self.normalized_page
+    // }
+}
+
+impl Drop for InflightPage {
+    fn drop(&mut self) {
+        self.inflight.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 #[derive(Clone)]
 struct NormalizationRuntime {
     shard: Option<usize>,
     normalizer: Normalizer,
     stripes: usize,
-    page_senders: Vec<mpsc::Sender<Arc<NormalizedPage>>>,
+    page_senders: Vec<mpsc::Sender<Arc<InflightPage>>>,
     manifest_sender: Option<mpsc::Sender<Arc<NormalizedPage>>>,
+    inflight: Arc<AtomicUsize>,
 }
 
 impl NormalizationRuntime {
@@ -1368,6 +1413,50 @@ impl NormalizationRuntime {
             stripes: handle.stripes,
             page_senders: handle.page_senders(),
             manifest_sender: handle.manifest_sender(),
+            inflight: handle.normalization_inflight.clone(),
+        }
+    }
+
+    async fn send_page_with_backpressure(
+        &self,
+        sender: &mpsc::Sender<Arc<InflightPage>>,
+        page: Arc<InflightPage>,
+    ) -> Result<(), NormalizationJobError> {
+        match timeout(Duration::from_secs(5), sender.send(Arc::clone(&page))).await {
+            Ok(result) => result.map_err(|err| {
+                NormalizationJobError::Channel(err.0.normalized_page.metadata.url.to_string())
+            }),
+            Err(_) => {
+                eprintln!(
+                    "normalization channel blocked for >5s (page); url={}",
+                    page.normalized_page.metadata.url
+                );
+                sender.send(page).await.map_err(|err| {
+                    NormalizationJobError::Channel(err.0.normalized_page.metadata.url.to_string())
+                })
+            }
+        }
+    }
+
+    async fn send_manifest_with_backpressure(
+        &self,
+        sender: &mpsc::Sender<Arc<NormalizedPage>>,
+        page: Arc<NormalizedPage>,
+    ) -> Result<(), NormalizationJobError> {
+        match timeout(Duration::from_secs(5), sender.send(Arc::clone(&page))).await {
+            Ok(result) => {
+                result.map_err(|err| NormalizationJobError::Channel(err.0.metadata.url.to_string()))
+            }
+            Err(_) => {
+                eprintln!(
+                    "normalization channel blocked for >5s (manifest); url={}",
+                    page.metadata.url
+                );
+                sender
+                    .send(page)
+                    .await
+                    .map_err(|err| NormalizationJobError::Channel(err.0.metadata.url.to_string()))
+            }
         }
     }
 
@@ -1389,14 +1478,24 @@ impl NormalizationRuntime {
             .normalize(&page)
             .map_err(NormalizationJobError::Normalize)?;
 
+        eprintln!(
+            "normalized: url={} body_text_len={} blocks_len={}",
+            page.url,
+            normalized.body_text.len(),
+            normalized.blocks.len()
+        );
         let normalized = Arc::new(normalized);
         let stripe = self.pick_stripe(&normalized);
 
         if let Some(manifest) = &self.manifest_sender {
-            send_with_backpressure_log("manifest", manifest, Arc::clone(&normalized)).await?;
+            self.send_manifest_with_backpressure(manifest, Arc::clone(&normalized))
+                .await?;
         }
 
-        send_with_backpressure_log("page", &self.page_senders[stripe], normalized).await
+        self.inflight.fetch_add(1, Ordering::Relaxed);
+        let wrapped_page = Arc::new(InflightPage::new(normalized, Arc::clone(&self.inflight)));
+        self.send_page_with_backpressure(&self.page_senders[stripe], wrapped_page)
+            .await
     }
 
     fn pick_stripe(&self, normalized: &Arc<NormalizedPage>) -> usize {
@@ -1407,27 +1506,6 @@ impl NormalizationRuntime {
             return shard % self.stripes;
         }
         stripe_hash(&normalized.metadata.url, self.stripes)
-    }
-}
-
-async fn send_with_backpressure_log(
-    label: &str,
-    sender: &mpsc::Sender<Arc<NormalizedPage>>,
-    page: Arc<NormalizedPage>,
-) -> Result<(), NormalizationJobError> {
-    match timeout(Duration::from_secs(5), sender.send(Arc::clone(&page))).await {
-        Ok(result) => result
-            .map_err(|err| NormalizationJobError::Channel(err.0.metadata.url.to_string())),
-        Err(_) => {
-            eprintln!(
-                "normalization channel blocked for >5s ({label}); url={}",
-                page.metadata.url
-            );
-            sender
-                .send(page)
-                .await
-                .map_err(|err| NormalizationJobError::Channel(err.0.metadata.url.to_string()))
-        }
     }
 }
 
@@ -1474,9 +1552,8 @@ impl JsonlSink {
         let mut guard = self
             .file
             .lock()
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "normalization writer poisoned"))?;
-        serde_json::to_writer(&mut *guard, value)
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+            .map_err(|_| io::Error::other("normalization writer poisoned"))?;
+        serde_json::to_writer(&mut *guard, value).map_err(io::Error::other)?;
         guard.write_all(b"\n")?;
         Ok(())
     }
@@ -1539,6 +1616,7 @@ struct Metrics {
     urls_enqueued: AtomicUsize,
     duplicates_filtered: AtomicUsize,
     frontier_rejections: AtomicUsize,
+    pages_normalized: AtomicUsize,
     http_errors: AtomicUsize,
     parse_errors: AtomicUsize,
     #[cfg(feature = "multi_thread")]
@@ -1564,6 +1642,10 @@ impl Metrics {
 
     fn record_duplicate(&self) {
         self.duplicates_filtered.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_page_normalized(&self) {
+        self.pages_normalized.fetch_add(1, Ordering::Relaxed);
     }
 
     fn record_error(&self, kind: TaskErrorKind) {
@@ -1598,9 +1680,7 @@ impl Metrics {
         let wall_secs = elapsed.as_secs_f32().max(f32::EPSILON);
         let crawl_secs = crawl_window.as_secs_f32().max(f32::EPSILON);
         let fetched = self.pages_fetched.load(Ordering::Relaxed);
-        println!(
-            "--- crawl metrics ({wall_secs:.2}s elapsed, {crawl_secs:.2}s crawl window) ---"
-        );
+        println!("--- crawl metrics ({wall_secs:.2}s elapsed, {crawl_secs:.2}s crawl window) ---");
         println!("pages fetched: {}", fetched);
         println!("urls fetched/sec: {:.2}", fetched as f32 / crawl_secs);
         if wall_secs > crawl_secs + f32::EPSILON {

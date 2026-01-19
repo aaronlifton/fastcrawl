@@ -1,0 +1,9 @@
+docs/
+target/
+.agentfs/
+.grok/
+memory/
+logs/
+*.lark
+*.out.json
+*.kdl

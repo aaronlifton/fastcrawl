@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = []
+default = ["multi_thread"]
 multi_thread = []
+debug_logs = []
 
 [dependencies]
 heapless = { version = "0.9.1", default-features = false }
@@ -43,3 +44,4 @@ axum = { version = "0.7", features = ["macros", "json"] }
 lru = "0.12"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+wiki_parser = { path = "wiki-parser" }

@@ -24,3 +24,19 @@ pub use normalizer::{
 };
 pub use runtime::run as run_crawler;
 pub use vector_store::TableName;
+
+#[cfg(feature = "debug_logs")]
+#[macro_export]
+// This allows use of the `eprintln!` macro via `debug_log!` macro.
+macro_rules! debug_log {
+        ($($arg:tt)*) => {
+            eprintln!($($arg)*);
+        };
+    }
+#[cfg(not(feature = "debug_logs"))]
+#[macro_export]
+// This effectively disables the `eprintln!` macro, effectively removing it from the code during
+// compilation.
+macro_rules! debug_log {
+    ($($arg:tt)*) => {};
+}
