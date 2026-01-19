@@ -9,6 +9,11 @@ Current fastest speed, with default controls of `max-depth` 4, `max-links-per-pa
 `duration-secs` 4 (it crawls for 4 seconds, but any enqued link is still awaited, so it ran for 26.61s) is **75.12
 pages/sec**.
 
+- fastcrawl runs a sharded, multi-threaded crawler (one OS thread per shard) with independent frontiers, bounded cross‑shard routing, and striped normalization output for fast downstream ingestion.
+- Uses tokio for async I/O and lol_html for low‑latency, streaming HTML parsing.
+- Includes an end‑to‑end RAG pipeline: normalize → embed (OpenAI or Qdrant inference) → load into Postgres/pgvector → retrieve via HTTP → answer with an OpenAI chat model.
+- Hybrid retrieval fuses pgvector similarity with Postgres full‑text search using Reciprocal Rank Fusion (RRF) for higher‑precision context.
+
 ## Metrics
 
 When running
