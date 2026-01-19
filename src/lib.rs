@@ -29,10 +29,11 @@ pub use vector_store::TableName;
 #[macro_export]
 // This allows use of the `eprintln!` macro via `debug_log!` macro.
 macro_rules! debug_log {
-        ($($arg:tt)*) => {
-            eprintln!($($arg)*);
-        };
-    }
+    ($($arg:tt)*) => {
+        eprintln!($($arg)*);
+    };
+}
+
 #[cfg(not(feature = "debug_logs"))]
 #[macro_export]
 // This effectively disables the `eprintln!` macro, effectively removing it from the code during

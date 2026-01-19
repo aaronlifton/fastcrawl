@@ -12,7 +12,7 @@ use crate::manifest::ManifestRecord;
 use crate::normalizer::{
     FetchedPage, NormalizationConfig, NormalizationError, NormalizedPage, Normalizer,
 };
-use crate::{Cli, CrawlControls};
+use crate::{debug_log, Cli, CrawlControls};
 use futures_util::future::join_all;
 use reqwest::{header::HeaderMap, Client};
 use serde::Serialize;
@@ -388,6 +388,7 @@ fn run_multi_thread(cli: Cli, seeds: &[&str], filter: UrlFilter) -> Result<(), D
 }
 
 #[cfg(feature = "multi_thread")]
+#[allow(clippy::too_many_arguments)]
 async fn run_shard_streaming(
     seeds: Vec<String>,
     filter: UrlFilter,
@@ -1221,7 +1222,7 @@ impl NormalizationHandle {
                         }
                     }
                 })
-                .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+                .map_err(io::Error::other)?;
 
             page_senders.push(sender);
             page_writers.push(handle);
@@ -1242,7 +1243,7 @@ impl NormalizationHandle {
                             }
                         }
                     })
-                    .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+                    .map_err(io::Error::other)?;
                 (Some(sender), Some(handle))
             }
             None => (None, None),
@@ -1478,11 +1479,12 @@ impl NormalizationRuntime {
             .normalize(&page)
             .map_err(NormalizationJobError::Normalize)?;
 
-        eprintln!(
-            "normalized: url={} body_text_len={} blocks_len={}",
+        debug_log!(
+            "normalized: url={} body_text_len={} blocks_len={} body_text_preview={}",
             page.url,
             normalized.body_text.len(),
-            normalized.blocks.len()
+            normalized.blocks.len(),
+            normalized.body_text.chars().take(128).collect::<String>(),
         );
         let normalized = Arc::new(normalized);
         let stripe = self.pick_stripe(&normalized);
@@ -1803,7 +1805,7 @@ async fn wait_for_drain<
         }
 
         polls += 1;
-        if polls % 50 == 0 {
+        if polls.is_multiple_of(50) {
             let pending = frontier.pending();
             let active = active_tasks.load(Ordering::Acquire);
             let backlogs: Vec<_> = registry.iter().map(|a| a.backlog()).collect();

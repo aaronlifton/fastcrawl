@@ -91,6 +91,7 @@ impl StreamingExtractor {
                 }
                 state.ignore_depth = state.ignore_depth.saturating_add(1);
             }
+            eprintln!("tag={} id={} class={}", tag, id_attr.take(), class_attr);
 
             // debug_log!(
             //     "tag={} in_root={} root_depth={:?} root_closed={} depth={}
@@ -341,13 +342,11 @@ struct HeadingEntry {
 }
 
 fn maybe_set_root(state: &mut StreamState, priority: u8, depth: usize) {
-    if state.root_closed {
-        return;
-    }
     if priority < state.root_priority {
         if state.root_priority != u8::MAX {
             state.reset_content();
         }
+        state.root_closed = false;
         state.root_priority = priority;
         state.root_depth = Some(depth);
         debug_log!("root_depth set to {:?}", state.root_depth);

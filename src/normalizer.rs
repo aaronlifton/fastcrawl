@@ -346,8 +346,10 @@ impl Normalizer {
             collector.walk(root);
             collector.finish()
         };
+
         debug_log!(
-            "normalize: short_text={} body_text_len={}, blocks_len={}",
+            "normalize({}): short_text={} body_text_len={}, blocks_len={}",
+            page.url.as_str(),
             &body_text[..body_text.len().min(128)],
             body_text.len(),
             blocks.len()
